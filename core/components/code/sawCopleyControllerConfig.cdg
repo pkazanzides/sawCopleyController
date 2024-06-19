@@ -5,7 +5,7 @@ inline-header {
 #include <set>
 #include <limits>
 #include <cisstCommon/cmnUnits.h>
-#include <cisstParameterTypes/prmJointType.h>
+#include <cisstCommon/cmnJointType.h>
 #include <sawCopleyController/sawCopleyControllerRevision.h>
 #include <sawCopleyController/sawCopleyControllerExport.h>
 
@@ -105,7 +105,7 @@ class {
     attribute CISST_EXPORT;
     member {
         name type;
-        type prmJointType;
+        type cmnJointType;
         visibility public;
     }
     member {
@@ -155,7 +155,7 @@ class {
     }
     member {
         name drive;
-        type std::vector<sawCopleyControllerConfig::axis>;
+        type sawCopleyControllerConfig::axis;
         visibility public;
     }
 }

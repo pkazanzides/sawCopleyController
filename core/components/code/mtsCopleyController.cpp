@@ -45,6 +45,12 @@ mtsCopleyController::~mtsCopleyController()
 
 void mtsCopleyController::Init(void)
 {
+    mPosRaw = 0;
+    mPos = 0.0;
+    mStatus = 0;
+    StateTable.AddData(mPosRaw, "position_raw");
+    StateTable.AddData(mPos,    "position");
+    StateTable.AddData(mStatus, "status");
 }
 
 void mtsCopleyController::SetupInterfaces(void)
@@ -57,10 +63,14 @@ void mtsCopleyController::SetupInterfaces(void)
         // Stats
         mInterface->AddCommandReadState(StateTable, StateTable.PeriodStats, "period_statistics");
 
-        // Extra stuff
+        mInterface->AddCommandReadState(this->StateTable, mPos, "GetPosition");
+        mInterface->AddCommandReadState(this->StateTable, mStatus, "GetStatus");
+
         mInterface->AddCommandRead(&mtsCopleyController::GetConnected, this, "GetConnected");
-        mInterface->AddCommandWrite(&mtsCopleyController::SendCommand, this, "SendCommand");
+        mInterface->AddCommandRead(&mtsCopleyController::GetJointType, this, "GetJointType");
         mInterface->AddCommandWriteReturn(&mtsCopleyController::SendCommandRet, this, "SendCommandRet");
+        mInterface->AddCommandWrite(&mtsCopleyController::PosMoveAbsolute, this, "PosMoveAbsolute");
+        mInterface->AddCommandWrite(&mtsCopleyController::PosMoveRelative, this, "PosMoveRelative");
     }
 }
 
@@ -128,9 +138,8 @@ void mtsCopleyController::Configure(const std::string& fileName)
         mInterface->SendStatus(this->GetName() + buf);
         
         sprintf(buf, "s r0x90 %d\r", m_config.baud_rate);
-        int nBytes = strlen(buf);
-        int nSent = mSerialPort.Write(buf, nBytes); 
-        if (nSent != nBytes) {
+        int nBytes = static_cast<int>(strlen(buf));
+        if (SendCommand(buf, nBytes) != 0) {
             CMN_LOG_CLASS_INIT_ERROR << "Failed to set baud rate to " << m_config.baud_rate << std::endl;
             return;
         }
@@ -149,6 +158,12 @@ void mtsCopleyController::Startup()
 
 void mtsCopleyController::Run()
 {
+    if (mSerialPort.IsOpened()) {
+        if (SendCommand("g r0x32\r", 8, &mPosRaw) == 0)
+            mPos = mPosRaw/m_config.drive.position_bits_to_SI.scale;
+        SendCommand("g r0xa0\r", 8, &mStatus);
+    }
+
     // Advance the state table now, so that any connected components can get
     // the latest data.
     StateTable.Advance();
@@ -163,21 +178,60 @@ void mtsCopleyController::Cleanup(){
     Close();
 }
 
-void mtsCopleyController::SendCommand(const std::string &cmdString)
+int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
 {
+    int rc = -1;
+    char msgBuf[128];
+    msgBuf[0] = 0;
     if (mSerialPort.IsOpened()) {
-        int nSent = mSerialPort.Write(cmdString);
-        if (nSent != cmdString.size()) {
-            CMN_LOG_RUN_ERROR << "Failed to write " << cmdString << std::endl;
-            return;
+        int nSent = mSerialPort.Write(cmd, len);
+        if (nSent == len) {
+            if (cmd[0] == 'r') {
+                // No response to reset command
+                mInterface->SendStatus("SendCommand: reset");
+                return 0;
+            }
+            Sleep(0.1);  // TEMP
+            char respBuf[64];
+            respBuf[0] = 0;
+            int nRecv = mSerialPort.Read(respBuf, sizeof(respBuf));
+            if (nRecv > 0) {
+                respBuf[nRecv] = 0;  // May not be needed
+                if (strncmp(respBuf, "ok", 2) == 0) {
+                    rc = 0;
+                }
+                else if (strncmp(respBuf, "e ", 2) == 0) {
+                    sscanf(respBuf+2, "%d", &rc);
+                    sprintf(msgBuf, "SendCommand %s: error %d", cmd, rc);
+                }
+                else if ((strncmp(respBuf, "v ", 2) == 0) ||
+                         (strncmp(respBuf, "r ", 2) == 0)) {
+                    if (value) {
+                        if (sscanf(respBuf+2, "%d", value) != 1)
+                            sprintf(msgBuf, "SendCommand %s: failed to parse response %s", cmd, respBuf);
+                    }
+                    else {
+                        sprintf(msgBuf, "SendCommand %s: ignoring response %s", cmd, respBuf);
+                    }
+                }
+                else {
+                    sprintf(msgBuf, "SendCommand %s: unexpected response %s", cmd, respBuf);
+                }
+            }
         }
-        Sleep(0.1);  // TEMP
-        char respBuf[64];
-        respBuf[0] = 0;
-        int nRecv = mSerialPort.Read(respBuf, sizeof(respBuf));
-        if (strncmp(respBuf, "ok", 2) != 0)
-            mInterface->SendError(cmdString + ": response was " + respBuf);
+        else {
+            sprintf(msgBuf, "SendCommand %s: failed to write command (nSent = %d, len = %d)",
+                    cmd, nSent, len);
+        }
     }
+    else {
+        sprintf(msgBuf, "SendCommand %s: serial port not open", cmd);
+    }
+
+    if (msgBuf[0])
+        mInterface->SendError(msgBuf);
+
+    return rc;
 }
 
 void mtsCopleyController::SendCommandRet(const std::string &cmdString, std::string &retString)
@@ -186,12 +240,31 @@ void mtsCopleyController::SendCommandRet(const std::string &cmdString, std::stri
         int nSent = mSerialPort.Write(cmdString);
         if (nSent != cmdString.size()) {
             CMN_LOG_RUN_ERROR << "Failed to write " << cmdString << std::endl;
+            retString.assign("Failed to write command");
             return;
         }
         Sleep(0.1);  // TEMP
         char respBuf[64];
         respBuf[0] = 0;
-        mSerialPort.Read(respBuf, sizeof(respBuf));
+        int nRecv = mSerialPort.Read(respBuf, sizeof(respBuf));
+        respBuf[nRecv] = 0;   // May not be needed
         retString.assign(respBuf);
     }
 }
+
+void mtsCopleyController::GetJointType(cmnJointType &jType) const
+{
+    jType = static_cast<cmnJointType>(m_config.drive.type);
+}
+
+void mtsCopleyController::PosMoveAbsolute(const double &goal)
+{
+    mInterface->SendStatus("PosMoveAbsolute: not yet implemented");
+}
+
+void mtsCopleyController::PosMoveRelative(const double &goal)
+{
+    mInterface->SendStatus("PosMoveRelative: not yet implemented");
+}
+
+CMN_IMPLEMENT_SERVICES_TEMPLATED(cmnJointTypeProxy)

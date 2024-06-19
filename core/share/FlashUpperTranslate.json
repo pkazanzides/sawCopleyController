@@ -8,6 +8,6 @@
         "position_bits_to_SI": {
            "scale":  500000,
            "offset": 0
-        },
+        }
     }
 }

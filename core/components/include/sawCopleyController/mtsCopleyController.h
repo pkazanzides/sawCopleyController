@@ -22,9 +22,15 @@ http://www.cisst.org/cisst/license.txt.
 
 #include <string>
 
+#include <cisstCommon/cmnJointType.h>
 #include <cisstMultiTask/mtsTaskContinuous.h>
 #include <cisstMultiTask/mtsInterfaceProvided.h>
 #include <cisstOSAbstraction/osaSerialPort.h>
+
+// PK TODO
+#include <cisstMultiTask/mtsGenericObjectProxy.h>
+typedef mtsGenericObjectProxy<cmnJointType> cmnJointTypeProxy;
+CMN_DECLARE_SERVICES_INSTANTIATION(cmnJointTypeProxy);
 
 #include <sawCopleyController/sawCopleyControllerConfig.h>
 
@@ -56,15 +62,25 @@ protected:
     osaSerialPort mSerialPort;
     mtsInterfaceProvided *mInterface;       // Provided interface
 
+    long mPosRaw;
+    double mPos;
+    long mStatus;
+
     void Init();
     void Close();
 
     void SetupInterfaces();
 
-    void GetConnected(bool &val) const { val = mSerialPort.IsOpened(); }
+    // Send the command to the drive; returns 0 on success
+    // For a read command, result returned in value
+    int SendCommand(const char *cmd, int len, long *value = 0);
 
-    void SendCommand(const std::string& cmdString);
+    // Methods for provided interface
+    void GetConnected(bool &val) const { val = mSerialPort.IsOpened(); }
     void SendCommandRet(const std::string& cmdString, std::string &retString);
+    void GetJointType(cmnJointType &jType) const;
+    void PosMoveAbsolute(const double &goal);
+    void PosMoveRelative(const double &goal);
 };
 
 CMN_DECLARE_SERVICES_INSTANTIATION(mtsCopleyController)

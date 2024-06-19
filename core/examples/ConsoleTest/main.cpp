@@ -21,6 +21,7 @@ http://www.cisst.org/cisst/license.txt.
 #include <cisstCommon/cmnKbHit.h>
 #include <cisstCommon/cmnGetChar.h>
 #include <cisstCommon/cmnConstants.h>
+#include <cisstCommon/cmnJointType.h>
 #include <cisstOSAbstraction/osaSleep.h>
 #include <cisstMultiTask/mtsManagerLocal.h>
 #include <cisstMultiTask/mtsTaskContinuous.h>
@@ -31,8 +32,18 @@ http://www.cisst.org/cisst/license.txt.
 class CopleyClient : public mtsTaskMain {
 
 private:
-    mtsFunctionRead GetConnected;
-    mtsFunctionWrite SendCommand;
+    cmnJointType jType;
+    double jtScale;
+    std::string jtUnits;
+    double mPos;
+    long mStatus;
+
+    mtsFunctionRead GetJointType;   // Prismatic or revolute
+    mtsFunctionRead GetPosition;    // Position in SI units
+    mtsFunctionRead GetStatus;      // Drive status
+    mtsFunctionWrite PosMoveAbsolute;
+    mtsFunctionWrite PosMoveRelative;
+    mtsFunctionRead GetConnected;   // Whether serial port is open
     mtsFunctionWriteReturn SendCommandRet;
 
     void OnStatusEvent(const mtsMessage &msg) {
@@ -51,9 +62,12 @@ public:
     {
         mtsInterfaceRequired *req = AddInterfaceRequired("Input", MTS_OPTIONAL);
         if (req) {
-            req->AddFunction("GetConnected", GetConnected);
-            req->AddFunction("SendCommand", SendCommand);
+            req->AddFunction("GetPosition", GetPosition);
+            req->AddFunction("GetStatus", GetStatus);
+            req->AddFunction("PosMoveAbsolute", PosMoveAbsolute);
+            req->AddFunction("PosMoveRelative", PosMoveRelative);
             req->AddFunction("SendCommandRet", SendCommandRet);
+            req->AddFunction("GetJointType", GetJointType);
             req->AddEventHandlerWrite(&CopleyClient::OnStatusEvent, this, "status");
             req->AddEventHandlerWrite(&CopleyClient::OnWarningEvent, this, "warning");
             req->AddEventHandlerWrite(&CopleyClient::OnErrorEvent, this, "error");
@@ -65,6 +79,8 @@ public:
     void PrintHelp()
     {
         std::cout << "Available commands:" << std::endl
+                  << "  m: absolute position move" << std::endl
+                  << "  r: relative position move" << std::endl
                   << "  c: send command" << std::endl
                   << "  h: display help information" << std::endl
                   << "  q: quit" << std::endl;
@@ -72,6 +88,20 @@ public:
 
     void Startup()
     {
+        GetJointType(jType);
+        if (jType == CMN_JOINT_PRISMATIC) {
+            jtScale = 1000.0;     // meters --> millimeters
+            jtUnits.assign("mm");
+        }
+        else if (jType == CMN_JOINT_REVOLUTE) {
+            jtScale = cmn180_PI;  // radians --> degrees
+            jtUnits.assign("deg");
+        }
+        else {
+            std::cout << "CopleyClient: unknown joint type (" << jType << ")" << std::endl;
+            jtScale = 1.0;
+            jtUnits.assign("cnts");
+        }
         PrintHelp();
     }
 
@@ -83,12 +113,29 @@ public:
         GetConnected(copleyOK);
 
         if (copleyOK) {
+            GetPosition(mPos);
+            GetStatus(mStatus);
         }
 
         char c = 0;
+        double jtGoal;
         if (cmnKbHit()) {
             c = cmnGetChar();
             switch (c) {
+
+            case 'm':   // position move joint
+                std::cout << std::endl << "Enter absolute position (" << jtUnits << "): ";
+                std::cin >> jtGoal;
+                std::cout << "Moving to " << jtGoal << std::endl;
+                PosMoveAbsolute(jtGoal/jtScale);
+                break;
+
+            case 'r':   // relative move joint
+                std::cout << std::endl << "Enter relative position (" << jtUnits << "): ";
+                std::cin >> jtGoal;
+                std::cout << "Relative move by " << jtGoal << std::endl;
+                PosMoveRelative(jtGoal/jtScale);
+                break;
 
             case 'c':
                 if (copleyOK) {
@@ -123,6 +170,14 @@ public:
         }
 
         if (copleyOK) {
+            printf("Pos: %8.2lf, Status: %8lx", mPos*jtScale, mStatus);
+            if (mStatus & (1<<9))
+                printf(", PosLim");
+            if (mStatus & (1<<10))
+                printf(", NegLim");
+            if (mStatus & (1<<27))
+                printf(", Moving");
+
         }
         else {
             printf("Copley not connected\r");
