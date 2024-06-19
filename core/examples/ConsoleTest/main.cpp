@@ -35,11 +35,14 @@ private:
     cmnJointType jType;
     double jtScale;
     std::string jtUnits;
+    long mPosRaw;
     double mPos;
     long mStatus;
+    unsigned int numCharsPrev;
 
     mtsFunctionRead GetJointType;   // Prismatic or revolute
     mtsFunctionRead GetPosition;    // Position in SI units
+    mtsFunctionRead GetPositionRaw; // Position in encoder counts
     mtsFunctionRead GetStatus;      // Drive status
     mtsFunctionWrite PosMoveAbsolute;
     mtsFunctionWrite PosMoveRelative;
@@ -58,11 +61,12 @@ private:
 
 public:
 
-    CopleyClient() : mtsTaskMain("CopleyClient")
+    CopleyClient() : mtsTaskMain("CopleyClient"), numCharsPrev(0)
     {
         mtsInterfaceRequired *req = AddInterfaceRequired("Input", MTS_OPTIONAL);
         if (req) {
             req->AddFunction("GetPosition", GetPosition);
+            req->AddFunction("GetPositionRaw", GetPositionRaw);
             req->AddFunction("GetStatus", GetStatus);
             req->AddFunction("PosMoveAbsolute", PosMoveAbsolute);
             req->AddFunction("PosMoveRelative", PosMoveRelative);
@@ -113,6 +117,7 @@ public:
         GetConnected(copleyOK);
 
         if (copleyOK) {
+            GetPositionRaw(mPosRaw);
             GetPosition(mPos);
             GetStatus(mStatus);
         }
@@ -170,14 +175,26 @@ public:
         }
 
         if (copleyOK) {
-            printf("Pos: %8.2lf, Status: %8lx", mPos*jtScale, mStatus);
-            if (mStatus & (1<<9))
+            printf("Pos: %8.2lf (%08lx), Status: %08lx", mPos*jtScale, mPosRaw, mStatus);
+            unsigned int numChars = 0;
+            if (mStatus & (1<<9)) {
                 printf(", PosLim");
-            if (mStatus & (1<<10))
+                numChars += 8;
+            }
+            if (mStatus & (1<<10)) {
                 printf(", NegLim");
-            if (mStatus & (1<<27))
+                numChars += 8;
+            }
+            if (mStatus & (1<<27)) {
                 printf(", Moving");
-
+                numChars += 8;
+            }
+            if (numChars < numCharsPrev) {
+                for (unsigned int i = numChars; i < numCharsPrev; i++)
+                    printf(" ");
+            }
+            numCharsPrev = numChars;
+            printf("\r");
         }
         else {
             printf("Copley not connected\r");

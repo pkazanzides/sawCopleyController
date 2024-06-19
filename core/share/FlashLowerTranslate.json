@@ -1,7 +1,7 @@
 {
     "file_version": 1,
-    "name": "FlashUpperTranslate",
-    "port_name": "COM7",
+    "name": "FlashLowerTranslate",
+    "port_name": "COM9",
     "baud_rate": 115200,
     "drive": {
         "type": "PRISMATIC",

@@ -1,10 +1,10 @@
 {
     "file_version": 1,
-    "name": "FlashUpperTranslate",
-    "port_name": "COM7",
+    "name": "FlashLowerRotate",
+    "port_name": "COM6",
     "baud_rate": 115200,
     "drive": {
-        "type": "PRISMATIC",
+        "type": "REVOLUTE",
         "position_bits_to_SI": {
            "scale":  500000,
            "offset": 0

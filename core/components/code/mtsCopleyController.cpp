@@ -63,6 +63,7 @@ void mtsCopleyController::SetupInterfaces(void)
         // Stats
         mInterface->AddCommandReadState(StateTable, StateTable.PeriodStats, "period_statistics");
 
+        mInterface->AddCommandReadState(this->StateTable, mPosRaw, "GetPositionRaw");
         mInterface->AddCommandReadState(this->StateTable, mPos, "GetPosition");
         mInterface->AddCommandReadState(this->StateTable, mStatus, "GetStatus");
 
@@ -137,7 +138,7 @@ void mtsCopleyController::Configure(const std::string& fileName)
         sprintf(buf, ": setting baud rate to %d", m_config.baud_rate);
         mInterface->SendStatus(this->GetName() + buf);
         
-        sprintf(buf, "s r0x90 %d\r", m_config.baud_rate);
+        sprintf(buf, "s r0x90 %d", m_config.baud_rate);
         int nBytes = static_cast<int>(strlen(buf));
         if (SendCommand(buf, nBytes) != 0) {
             CMN_LOG_CLASS_INIT_ERROR << "Failed to set baud rate to " << m_config.baud_rate << std::endl;
@@ -159,9 +160,9 @@ void mtsCopleyController::Startup()
 void mtsCopleyController::Run()
 {
     if (mSerialPort.IsOpened()) {
-        if (SendCommand("g r0x32\r", 8, &mPosRaw) == 0)
+        if (SendCommand("g r0x32", 8, &mPosRaw) == 0)
             mPos = mPosRaw/m_config.drive.position_bits_to_SI.scale;
-        SendCommand("g r0xa0\r", 8, &mStatus);
+        SendCommand("g r0xa0", 8, &mStatus);
     }
 
     // Advance the state table now, so that any connected components can get
@@ -185,6 +186,12 @@ int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
     msgBuf[0] = 0;
     if (mSerialPort.IsOpened()) {
         int nSent = mSerialPort.Write(cmd, len);
+        // Add CR ('\r') if not already in cmd
+        if (cmd[len-1] != '\r') {
+            char cr = '\r';
+            len++;
+            nSent += mSerialPort.Write(&cr, 1);
+        }
         if (nSent == len) {
             if (cmd[0] == 'r') {
                 // No response to reset command
