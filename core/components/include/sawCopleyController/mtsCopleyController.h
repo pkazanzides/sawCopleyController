@@ -27,11 +27,6 @@ http://www.cisst.org/cisst/license.txt.
 #include <cisstMultiTask/mtsInterfaceProvided.h>
 #include <cisstOSAbstraction/osaSerialPort.h>
 
-// PK TODO
-#include <cisstMultiTask/mtsGenericObjectProxy.h>
-typedef mtsGenericObjectProxy<cmnJointType> cmnJointTypeProxy;
-CMN_DECLARE_SERVICES_INSTANTIATION(cmnJointTypeProxy);
-
 #include <sawCopleyController/sawCopleyControllerConfig.h>
 
 // Always include last
@@ -62,6 +57,8 @@ protected:
     osaSerialPort mSerialPort;
     mtsInterfaceProvided *mInterface;       // Provided interface
 
+    char cmdBuf[64];   // Buffer for sending commands
+    char msgBuf[128];  // Buffer for sending messages
     long mPosRaw;
     double mPos;
     long mStatus;
@@ -74,6 +71,12 @@ protected:
     // Send the command to the drive; returns 0 on success
     // For a read command, result returned in value
     int SendCommand(const char *cmd, int len, long *value = 0);
+
+    int ParameterSet(unsigned int addr, long value, bool inRAM = true);
+    int ParameterGet(unsigned int addr, long &value, bool inRAM = true);
+
+    // For testing
+    void SaveParameters(const std::string &fileName);
 
     // Methods for provided interface
     void GetConnected(bool &val) const { val = mSerialPort.IsOpened(); }

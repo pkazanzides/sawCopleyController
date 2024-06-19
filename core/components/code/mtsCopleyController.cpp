@@ -15,6 +15,8 @@ http://www.cisst.org/cisst/license.txt.
 --- end cisst license ---
 */
 
+#include <fstream>
+
 #include <cisstCommon/cmnPath.h>
 #include <cisstCommon/cmnAssert.h>
 
@@ -120,7 +122,6 @@ void mtsCopleyController::Configure(const std::string& fileName)
     Sleep(breakTime + 0.5 * cmn_s);
 
     if (m_config.baud_rate != 9600) {
-        char buf[64];
         // If desired baud rate is not 9600
         osaSerialPort::BaudRateType baudRate;
         switch (m_config.baud_rate) {
@@ -135,12 +136,12 @@ void mtsCopleyController::Configure(const std::string& fileName)
         default:     CMN_LOG_CLASS_INIT_ERROR << "Unsupported baud rate " << m_config.baud_rate << std::endl;
                      return;
         }
-        sprintf(buf, ": setting baud rate to %d", m_config.baud_rate);
-        mInterface->SendStatus(this->GetName() + buf);
+        std::cout << this->GetName() <<  ": setting baud rate to " << m_config.baud_rate << std::endl;
         
-        sprintf(buf, "s r0x90 %d", m_config.baud_rate);
-        int nBytes = static_cast<int>(strlen(buf));
-        if (SendCommand(buf, nBytes) != 0) {
+        sprintf(cmdBuf, "s r0x90 %d\r", m_config.baud_rate);
+        int nBytes = static_cast<int>(strlen(cmdBuf));
+        int nSent = mSerialPort.Write(cmdBuf, nBytes);
+        if (nSent != nBytes) {
             CMN_LOG_CLASS_INIT_ERROR << "Failed to set baud rate to " << m_config.baud_rate << std::endl;
             return;
         }
@@ -150,19 +151,23 @@ void mtsCopleyController::Configure(const std::string& fileName)
         if (!mSerialPort.Configure()) {
             CMN_LOG_CLASS_INIT_ERROR << "Failed to configure serial port" << std::endl;
         }
+        std::cout << this->GetName() << ": configuration completed" << std::endl;
     }
 }
 
 void mtsCopleyController::Startup()
 {
+    //std::cout << this->GetName() << ": saving parameters to file" << std::endl;
+    //SaveParameters(m_config.name + ".csv");
+    //std::cout << this->GetName() << ": finished saving parameters" << std::endl;
 }
 
 void mtsCopleyController::Run()
 {
     if (mSerialPort.IsOpened()) {
-        if (SendCommand("g r0x32", 8, &mPosRaw) == 0)
+        if (ParameterGet(0x32, mPosRaw) == 0)
             mPos = mPosRaw/m_config.drive.position_bits_to_SI.scale;
-        SendCommand("g r0xa0", 8, &mStatus);
+        ParameterGet(0xa0, mStatus);
     }
 
     // Advance the state table now, so that any connected components can get
@@ -182,7 +187,6 @@ void mtsCopleyController::Cleanup(){
 int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
 {
     int rc = -1;
-    char msgBuf[128];
     msgBuf[0] = 0;
     if (mSerialPort.IsOpened()) {
         int nSent = mSerialPort.Write(cmd, len);
@@ -241,11 +245,25 @@ int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
     return rc;
 }
 
+int mtsCopleyController::ParameterSet(unsigned int addr, long value, bool inRAM)
+{
+    char bank = inRAM ? 'r' : 'f';
+    sprintf(cmdBuf, "s %c0x%x %d\r", bank, addr, value);
+    return SendCommand(cmdBuf, static_cast<int>(strlen(cmdBuf)));
+}
+
+int mtsCopleyController::ParameterGet(unsigned int addr, long &value, bool inRAM)
+{
+    char bank = inRAM ? 'r' : 'f';
+    sprintf(cmdBuf, "g %c0x%x\r", bank, addr);
+    return SendCommand(cmdBuf, static_cast<int>(strlen(cmdBuf)), &value);
+}
+
 void mtsCopleyController::SendCommandRet(const std::string &cmdString, std::string &retString)
 {
     if (mSerialPort.IsOpened()) {
-        int nSent = mSerialPort.Write(cmdString);
-        if (nSent != cmdString.size()) {
+        int nSent = mSerialPort.Write(cmdString+"\r");
+        if (nSent != cmdString.size()+1) {
             CMN_LOG_RUN_ERROR << "Failed to write " << cmdString << std::endl;
             retString.assign("Failed to write command");
             return;
@@ -266,12 +284,97 @@ void mtsCopleyController::GetJointType(cmnJointType &jType) const
 
 void mtsCopleyController::PosMoveAbsolute(const double &goal)
 {
-    mInterface->SendStatus("PosMoveAbsolute: not yet implemented");
+    ParameterSet(0xc8, 0);         // Absolute move, trapezoidal profile
+    long goalCnts = static_cast<long>(goal/m_config.drive.position_bits_to_SI.scale);
+    ParameterSet(0xca, goalCnts);  // Position goal
+    // TODO: set velocity, accel, decel
+    long desiredState = -1;
+    ParameterGet(0x24, desiredState);
+    if (desiredState != 21) {
+        sprintf(msgBuf, "PosMoveAbsolute: changing state from %ld to 21", desiredState);
+        mInterface->SendStatus(msgBuf);
+        ParameterSet(0x24, 21);
+    }
+    int rc = SendCommand("t 1\r", 4);
+    if (rc != 0) {
+        sprintf(msgBuf, "PosMoveAbsolute: error %d", rc);
+        mInterface->SendStatus(msgBuf);
+    }
 }
 
 void mtsCopleyController::PosMoveRelative(const double &goal)
 {
-    mInterface->SendStatus("PosMoveRelative: not yet implemented");
+    ParameterSet(0xc8, 256);       // Relative move, trapezoidal profile
+    long goalCnts = static_cast<long>(goal/m_config.drive.position_bits_to_SI.scale);
+    ParameterSet(0xca, goalCnts);  // Position goal
+    // TODO: set velocity, accel, decel
+    long desiredState = -1;
+    ParameterGet(0x24, desiredState);
+    if (desiredState != 21) {
+        sprintf(msgBuf, "PosMoveRelative: changing state from %ld to 21", desiredState);
+        mInterface->SendStatus(msgBuf);
+        ParameterSet(0x24, 21);
+    }
+    int rc = SendCommand("t 1\r", 4);
+    if (rc != 0) {
+        sprintf(msgBuf, "PosMoveRelative: error %d", rc);
+        mInterface->SendStatus(msgBuf);
+    }
 }
 
-CMN_IMPLEMENT_SERVICES_TEMPLATED(cmnJointTypeProxy)
+// For testing
+
+struct ParameterList {
+    unsigned int addr;
+    std::string desc;
+};
+
+ParameterList parms[] = { // Programmed Position Mode Parameters
+                          { 0xc8, "profile type"   },
+                          { 0xcb, "max velocity"   },
+                          { 0xcc, "max accel"      },
+                          { 0xcd, "max decel"      },
+                          // Homing Mode Parameters
+                          { 0xc2, "homing method"  },
+                          { 0xc3, "fast vel"       },
+                          { 0xc4, "slow vel"       },
+                          { 0xc5, "accel/decel"    },
+                          { 0xc6, "home offset"    },
+                          { 0xc7, "current limit"  },
+                          { 0xb8, "swlim+"         },
+                          { 0xb9, "swlim-"         },
+                          // Current Loop Limits Parameters
+                          { 0x21, "peak current"   },
+                          { 0x22, "cont current"   },
+                          { 0x23, "I2T time"       },
+                          { 0xae, "current offset" },
+                          // Current Loop Gains Parameters
+                          { 0x00, "Cp"             },
+                          { 0x01, "Ci"             },
+                          // Velocity Loop Limits Parameters
+                          { 0x3a, "vel limit"      },
+                          { 0x36, "accel limit"    },
+                          { 0x37, "decel limit"    },
+                          { 0xcf, "fast stop ramp" },
+                          // Velocity Loop Gains Parameters
+                          { 0x27, "Vp",            },
+                          { 0x28, "Vi",            },
+                          // Position Loop Gains Parameters
+                          { 0x30, "Pp"             },
+                          { 0x33, "vel ff"         },
+                          { 0x34, "accel ff"       },
+                          { 0xe3, "gain mult"      }
+                        };
+
+void mtsCopleyController::SaveParameters(const std::string &fileName)
+{
+    std::ofstream csvFile(fileName.c_str());
+    size_t numParms = sizeof(parms)/sizeof(ParameterList);
+    for (size_t i = 0; i < numParms; i++) {
+        long fromRAM, fromFlash;
+        ParameterGet(parms[i].addr, fromRAM);
+        ParameterGet(parms[i].addr, fromFlash, false);
+        csvFile << parms[i].desc << ", " << std::hex << parms[i].addr << ", "
+                << fromRAM << ", " << fromFlash << std::dec << std::endl;
+    }
+}
