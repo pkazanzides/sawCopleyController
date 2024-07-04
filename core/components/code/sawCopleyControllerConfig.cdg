@@ -154,8 +154,8 @@ class {
         visibility public;
     }
     member {
-        name drive;
-        type sawCopleyControllerConfig::axis;
+        name axes;
+        type std::vector<sawCopleyControllerConfig::axis>;
         visibility public;
     }
 }

@@ -3,11 +3,11 @@
     "name": "FlashUpperRotate",
     "port_name": "COM8",
     "baud_rate": 115200,
-    "drive": {
+    "axes": [ {
         "type": "REVOLUTE",
         "position_bits_to_SI": {
            "scale":  500000,
            "offset": 0
         }
-    }
+    } ]
 }

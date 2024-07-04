@@ -22,10 +22,14 @@ http://www.cisst.org/cisst/license.txt.
 
 #include <string>
 
-#include <cisstCommon/cmnJointType.h>
+#include <cisstVector/vctDynamicVectorTypes.h>
 #include <cisstMultiTask/mtsTaskContinuous.h>
 #include <cisstMultiTask/mtsInterfaceProvided.h>
 #include <cisstOSAbstraction/osaSerialPort.h>
+#include <cisstParameterTypes/prmConfigurationJoint.h>
+#include <cisstParameterTypes/prmStateJoint.h>
+#include <cisstParameterTypes/prmPositionJointSet.h>
+#include <cisstParameterTypes/prmOperatingState.h>
 
 #include <sawCopleyController/sawCopleyControllerConfig.h>
 
@@ -53,15 +57,19 @@ class CISST_EXPORT mtsCopleyController : public mtsTaskContinuous
 protected:
 
     sawCopleyControllerConfig::controller m_config;
+    unsigned int mNumAxes;                  // Number of axes
 
     osaSerialPort mSerialPort;
     mtsInterfaceProvided *mInterface;       // Provided interface
 
     char cmdBuf[64];   // Buffer for sending commands
     char msgBuf[128];  // Buffer for sending messages
-    long mPosRaw;
-    double mPos;
-    long mStatus;
+
+    vctLongVec mPosRaw;
+    vctDoubleVec mPos;
+    vctLongVec mStatus;
+    prmConfigurationJoint m_config_j;       // Joint configuration
+    prmStateJoint m_measured_js;            // Measured joint state (CRTK)
 
     void Init();
     void Close();
@@ -72,8 +80,8 @@ protected:
     // For a read command, result returned in value
     int SendCommand(const char *cmd, int len, long *value = 0);
 
-    int ParameterSet(unsigned int addr, long value, bool inRAM = true);
-    int ParameterGet(unsigned int addr, long &value, bool inRAM = true);
+    int ParameterSet(unsigned int addr, long value, unsigned int axis = 0, bool inRAM = true);
+    int ParameterGet(unsigned int addr, long &value, unsigned int axis = 0, bool inRAM = true);
 
     // For testing
     void SaveParameters(const std::string &fileName);
@@ -81,9 +89,15 @@ protected:
     // Methods for provided interface
     void GetConnected(bool &val) const { val = mSerialPort.IsOpened(); }
     void SendCommandRet(const std::string& cmdString, std::string &retString);
-    void GetJointType(cmnJointType &jType) const;
-    void PosMoveAbsolute(const double &goal);
-    void PosMoveRelative(const double &goal);
+
+    // Get joint configuration
+    void GetConfig_js(prmConfigurationJoint &cfg_j) const
+    { cfg_j = m_config_j; }
+
+    void move_jp(const prmPositionJointSet &goal);
+    void move_jr(const prmPositionJointSet &goal);
+
+    void move_common(const char *cmdName, const vctDoubleVec &goal, unsigned int profile_type);
 };
 
 CMN_DECLARE_SERVICES_INSTANTIATION(mtsCopleyController)

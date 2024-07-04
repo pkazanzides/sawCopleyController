@@ -3,11 +3,11 @@
     "name": "FlashLowerTranslate",
     "port_name": "COM9",
     "baud_rate": 115200,
-    "drive": {
+    "axes": [ {
         "type": "PRISMATIC",
         "position_bits_to_SI": {
            "scale":  500000,
            "offset": 0
         }
-    }
+    } ]
 }

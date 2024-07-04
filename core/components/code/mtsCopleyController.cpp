@@ -47,12 +47,7 @@ mtsCopleyController::~mtsCopleyController()
 
 void mtsCopleyController::Init(void)
 {
-    mPosRaw = 0;
-    mPos = 0.0;
-    mStatus = 0;
-    StateTable.AddData(mPosRaw, "position_raw");
-    StateTable.AddData(mPos,    "position");
-    StateTable.AddData(mStatus, "status");
+    mNumAxes = 1;
 }
 
 void mtsCopleyController::SetupInterfaces(void)
@@ -66,20 +61,24 @@ void mtsCopleyController::SetupInterfaces(void)
         mInterface->AddCommandReadState(StateTable, StateTable.PeriodStats, "period_statistics");
 
         mInterface->AddCommandReadState(this->StateTable, mPosRaw, "GetPositionRaw");
-        mInterface->AddCommandReadState(this->StateTable, mPos, "GetPosition");
-        mInterface->AddCommandReadState(this->StateTable, mStatus, "GetStatus");
+
+        // Standard CRTK interfaces
+        mInterface->AddCommandReadState(this->StateTable, m_measured_js, "measured_js");
+        mInterface->AddCommandWrite(&mtsCopleyController::move_jp, this, "move_jp");
+        mInterface->AddCommandWrite(&mtsCopleyController::move_jr, this, "move_jr");
+        mInterface->AddCommandRead(&mtsCopleyController::GetConfig_js, this, "configuration_js");
 
         mInterface->AddCommandRead(&mtsCopleyController::GetConnected, this, "GetConnected");
-        mInterface->AddCommandRead(&mtsCopleyController::GetJointType, this, "GetJointType");
         mInterface->AddCommandWriteReturn(&mtsCopleyController::SendCommandRet, this, "SendCommandRet");
-        mInterface->AddCommandWrite(&mtsCopleyController::PosMoveAbsolute, this, "PosMoveAbsolute");
-        mInterface->AddCommandWrite(&mtsCopleyController::PosMoveRelative, this, "PosMoveRelative");
+        mInterface->AddCommandReadState(this->StateTable, mStatus, "GetStatus");
     }
 }
 
 void mtsCopleyController::Close()
 {
+#ifndef SIMULATION
     mSerialPort.Close();
+#endif
 }
 
 void mtsCopleyController::Configure(const std::string& fileName)
@@ -104,8 +103,46 @@ void mtsCopleyController::Configure(const std::string& fileName)
                                << "Loaded configuration:" << std::endl
                                << m_config << std::endl;
     
+    // Size of array determines number of axes
+    mNumAxes = static_cast<unsigned int>(m_config.axes.size());
+    CMN_LOG_CLASS_INIT_VERBOSE << "Configure: found " << mNumAxes << " axes" << std::endl;
+
+    // Now, set the data sizes
+    m_config_j.Name().SetSize(mNumAxes);
+    m_config_j.Type().SetSize(mNumAxes);
+    m_config_j.PositionMin().SetSize(mNumAxes);
+    m_config_j.PositionMax().SetSize(mNumAxes);
+    // Raw encoder position
+    mPosRaw.SetSize(mNumAxes);
+    mPosRaw.SetAll(0);
+    // We have position for measured_js
+    m_measured_js.Name().SetSize(mNumAxes);
+    m_measured_js.Position().SetSize(mNumAxes);
+    m_measured_js.Position().SetAll(0.0);
+    // Status
+    mStatus.SetSize(mNumAxes);
+    mStatus.SetAll(0);
+
+    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+        sawCopleyControllerConfig::axis &axisData = m_config.axes[axis];
+        m_measured_js.Name()[axis].assign(1, 'A'+axis);
+        m_config_j.Name()[axis].assign(1, 'A'+axis);
+        m_config_j.Type()[axis] = static_cast<cmnJointType>(axisData.type);
+        m_config_j.PositionMin()[axis] = axisData.position_limits.lower;
+        m_config_j.PositionMax()[axis] = axisData.position_limits.upper;
+    }
+
+    StateTable.AddData(mPosRaw, "position_raw");
+    StateTable.AddData(m_measured_js, "measured_js");
+    StateTable.AddData(mStatus, "status");
+
+    // Call SetupInterfaces after Configure because we need to know the correct sizes of
+    // the dynamic vectors, which are based on the number of configured axes.
+    // These sizes should be set before calling StateTable.AddData and AddCommandReadState;
+    // in the latter case, this ensures that the argument prototype has the correct size.
     SetupInterfaces();
 
+#ifndef SIMULATION
     mSerialPort.SetPortName(m_config.port_name);
     // Default constructor sets port to 9600 baud, N,8,1
     if (!mSerialPort.Open()) {
@@ -153,6 +190,7 @@ void mtsCopleyController::Configure(const std::string& fileName)
         }
         std::cout << this->GetName() << ": configuration completed" << std::endl;
     }
+#endif
 }
 
 void mtsCopleyController::Startup()
@@ -164,11 +202,26 @@ void mtsCopleyController::Startup()
 
 void mtsCopleyController::Run()
 {
+#ifndef SIMULATION
     if (mSerialPort.IsOpened()) {
-        if (ParameterGet(0x32, mPosRaw) == 0)
-            mPos = mPosRaw/m_config.drive.position_bits_to_SI.scale;
-        ParameterGet(0xa0, mStatus);
+        long posRaw, status;
+        for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+            if (ParameterGet(0x32, posRaw, axis) == 0) {
+                mPosRaw[axis] = posRaw;
+                m_measured_js.Position()[axis] = mPosRaw[axis]/m_config.axes[axis].position_bits_to_SI.scale;
+            }
+            if (ParameterGet(0xa0, status, axis) == 0) {
+                mStatus[axis] = status;
+            }
+        }
     }
+#else
+    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+        mPosRaw[axis] = 0;
+        m_measured_js.Position()[axis] = 0.0;
+        mStatus[axis] = 0;
+    }
+#endif
 
     // Advance the state table now, so that any connected components can get
     // the latest data.
@@ -187,6 +240,7 @@ void mtsCopleyController::Cleanup(){
 int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
 {
     int rc = -1;
+#ifndef SIMULATION
     msgBuf[0] = 0;
     if (mSerialPort.IsOpened()) {
         int nSent = mSerialPort.Write(cmd, len);
@@ -238,6 +292,9 @@ int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
     else {
         sprintf(msgBuf, "SendCommand %s: serial port not open", cmd);
     }
+#else
+    sprintf(msgBuf, "SendCommand %s: no serial port in SIMULATION", cmd);
+#endif
 
     if (msgBuf[0])
         mInterface->SendError(msgBuf);
@@ -245,22 +302,33 @@ int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
     return rc;
 }
 
-int mtsCopleyController::ParameterSet(unsigned int addr, long value, bool inRAM)
+int mtsCopleyController::ParameterSet(unsigned int addr, long value, unsigned int axis, bool inRAM)
 {
+    char *p = cmdBuf;
+    if (mNumAxes != 1) {
+        sprintf(p, ".%c ", 'A'+axis);
+        p += 3;
+    }
     char bank = inRAM ? 'r' : 'f';
-    sprintf(cmdBuf, "s %c0x%x %d\r", bank, addr, value);
+    sprintf(p, "s %c0x%x %d\r", bank, addr, value);
     return SendCommand(cmdBuf, static_cast<int>(strlen(cmdBuf)));
 }
 
-int mtsCopleyController::ParameterGet(unsigned int addr, long &value, bool inRAM)
+int mtsCopleyController::ParameterGet(unsigned int addr, long &value, unsigned int axis, bool inRAM)
 {
+    char *p = cmdBuf;
+    if (mNumAxes != 1) {
+        sprintf(p, ".%c ", 'A'+axis);
+        p += 3;
+    }
     char bank = inRAM ? 'r' : 'f';
-    sprintf(cmdBuf, "g %c0x%x\r", bank, addr);
+    sprintf(p, "g %c0x%x\r", bank, addr);
     return SendCommand(cmdBuf, static_cast<int>(strlen(cmdBuf)), &value);
 }
 
 void mtsCopleyController::SendCommandRet(const std::string &cmdString, std::string &retString)
 {
+#ifndef SIMULATION
     if (mSerialPort.IsOpened()) {
         int nSent = mSerialPort.Write(cmdString+"\r");
         if (nSent != cmdString.size()+1) {
@@ -275,51 +343,63 @@ void mtsCopleyController::SendCommandRet(const std::string &cmdString, std::stri
         respBuf[nRecv] = 0;   // May not be needed
         retString.assign(respBuf);
     }
+#else
+    retString.assign("SIMULATION");
+#endif
 }
 
-void mtsCopleyController::GetJointType(cmnJointType &jType) const
+void mtsCopleyController::move_jp(const prmPositionJointSet &goal)
 {
-    jType = static_cast<cmnJointType>(m_config.drive.type);
+    // profile_type 0 means absolute move, trapezoidal profile
+    move_common("move_jp", goal.Goal(), 0);
 }
 
-void mtsCopleyController::PosMoveAbsolute(const double &goal)
+void mtsCopleyController::move_jr(const prmPositionJointSet &goal)
 {
-    ParameterSet(0xc8, 0);         // Absolute move, trapezoidal profile
-    long goalCnts = static_cast<long>(goal/m_config.drive.position_bits_to_SI.scale);
-    ParameterSet(0xca, goalCnts);  // Position goal
-    // TODO: set velocity, accel, decel
-    long desiredState = -1;
-    ParameterGet(0x24, desiredState);
-    if (desiredState != 21) {
-        sprintf(msgBuf, "PosMoveAbsolute: changing state from %ld to 21", desiredState);
-        mInterface->SendStatus(msgBuf);
-        ParameterSet(0x24, 21);
-    }
-    int rc = SendCommand("t 1\r", 4);
-    if (rc != 0) {
-        sprintf(msgBuf, "PosMoveAbsolute: error %d", rc);
-        mInterface->SendStatus(msgBuf);
-    }
+    // profile_type 256 means relative move, trapezoidal profile
+    move_common("move_jr", goal.Goal(), 256);
 }
 
-void mtsCopleyController::PosMoveRelative(const double &goal)
+void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &goal,
+                                      unsigned int profile_type)
 {
-    ParameterSet(0xc8, 256);       // Relative move, trapezoidal profile
-    long goalCnts = static_cast<long>(goal/m_config.drive.position_bits_to_SI.scale);
-    ParameterSet(0xca, goalCnts);  // Position goal
-    // TODO: set velocity, accel, decel
-    long desiredState = -1;
-    ParameterGet(0x24, desiredState);
-    if (desiredState != 21) {
-        sprintf(msgBuf, "PosMoveRelative: changing state from %ld to 21", desiredState);
-        mInterface->SendStatus(msgBuf);
-        ParameterSet(0x24, 21);
+    if (goal.size() != mNumAxes) {
+        mInterface->SendError(this->GetName() + ": size mismatch in " + std::string(cmdName));
+        return;
     }
-    int rc = SendCommand("t 1\r", 4);
-    if (rc != 0) {
-        sprintf(msgBuf, "PosMoveRelative: error %d", rc);
-        mInterface->SendStatus(msgBuf);
+
+#ifndef SIMULATION
+    unsigned int axis;
+    for (axis = 0; axis < mNumAxes; axis++) {
+        ParameterSet(0xc8, profile_type, axis);
+        long goalCnts = static_cast<long>(goal[axis]/m_config.axes[axis].position_bits_to_SI.scale);
+        ParameterSet(0xca, goalCnts, axis);  // Position goal
+        // TODO: set velocity, accel, decel
+        long desiredState = -1;
+        ParameterGet(0x24, desiredState, axis);
+        if (desiredState != 21) {
+            sprintf(msgBuf, "%s: changing state for axis %d from %ld to 21", cmdName, axis, desiredState);
+            mInterface->SendStatus(msgBuf);
+            ParameterSet(0x24, 21, axis);
+        }
     }
+    // Note that newer multi-axis drives allow the axes to be specified in the command code;
+    // the following code could be updated to use that feature.
+    for (axis = 0; axis < mNumAxes; axis++) {
+        int rc;
+        if (mNumAxes == 1) {
+            rc = SendCommand("t 1\r", 4);
+        }
+        else {
+            sprintf(cmdBuf, ".%c t 1\r", 'A'+axis);
+            rc = SendCommand(cmdBuf, 7);
+        }
+        if (rc != 0) {
+            sprintf(msgBuf, "%s: axis %d, error %d", cmdName, axis, rc);
+            mInterface->SendStatus(msgBuf);
+        }
+    }
+#endif
 }
 
 // For testing
@@ -371,10 +451,16 @@ void mtsCopleyController::SaveParameters(const std::string &fileName)
     std::ofstream csvFile(fileName.c_str());
     size_t numParms = sizeof(parms)/sizeof(ParameterList);
     for (size_t i = 0; i < numParms; i++) {
+        csvFile << parms[i].desc << ", " << std::hex << parms[i].addr << ", ";
         long fromRAM, fromFlash;
-        ParameterGet(parms[i].addr, fromRAM);
-        ParameterGet(parms[i].addr, fromFlash, false);
-        csvFile << parms[i].desc << ", " << std::hex << parms[i].addr << ", "
-                << fromRAM << ", " << fromFlash << std::dec << std::endl;
+        if (ParameterGet(parms[i].addr, fromRAM) == 0)
+            csvFile << std::hex << fromRAM << ", ";
+        else
+            csvFile << "ERROR, ";
+        if (ParameterGet(parms[i].addr, fromFlash, false) == 0)
+            csvFile << std::hex << fromFlash;
+        else
+            csvFile << "ERROR";
+        csvFile << std::dec << std::endl;
     }
 }

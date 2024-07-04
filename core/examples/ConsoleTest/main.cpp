@@ -21,7 +21,6 @@ http://www.cisst.org/cisst/license.txt.
 #include <cisstCommon/cmnKbHit.h>
 #include <cisstCommon/cmnGetChar.h>
 #include <cisstCommon/cmnConstants.h>
-#include <cisstCommon/cmnJointType.h>
 #include <cisstOSAbstraction/osaSleep.h>
 #include <cisstMultiTask/mtsManagerLocal.h>
 #include <cisstMultiTask/mtsTaskContinuous.h>
@@ -32,20 +31,26 @@ http://www.cisst.org/cisst/license.txt.
 class CopleyClient : public mtsTaskMain {
 
 private:
-    cmnJointType jType;
-    double jtScale;
-    std::string jtUnits;
-    long mPosRaw;
-    double mPos;
-    long mStatus;
+    size_t NumAxes;
+    prmConfigurationJoint m_config_js;
+    prmStateJoint m_measured_js;
+    prmPositionJointSet jtposSet;
+
+    vctDoubleVec jtScale;
+    std::vector<std::string> jtUnits;
+    vctDoubleVec jtgoal;
+    vctDoubleVec jtpos;
+    vctLongVec mPosRaw;
+    vctLongVec mStatus;
     unsigned int numCharsPrev;
 
-    mtsFunctionRead GetJointType;   // Prismatic or revolute
-    mtsFunctionRead GetPosition;    // Position in SI units
+    mtsFunctionRead get_config_js;
+    mtsFunctionRead measured_js;
+
     mtsFunctionRead GetPositionRaw; // Position in encoder counts
     mtsFunctionRead GetStatus;      // Drive status
-    mtsFunctionWrite PosMoveAbsolute;
-    mtsFunctionWrite PosMoveRelative;
+    mtsFunctionWrite move_jp;
+    mtsFunctionWrite move_jr;
     mtsFunctionRead GetConnected;   // Whether serial port is open
     mtsFunctionWriteReturn SendCommandRet;
 
@@ -61,17 +66,17 @@ private:
 
 public:
 
-    CopleyClient() : mtsTaskMain("CopleyClient"), numCharsPrev(0)
+    CopleyClient() : mtsTaskMain("CopleyClient"), NumAxes(0), numCharsPrev(0)
     {
         mtsInterfaceRequired *req = AddInterfaceRequired("Input", MTS_OPTIONAL);
         if (req) {
-            req->AddFunction("GetPosition", GetPosition);
+            req->AddFunction("measured_js", measured_js);
             req->AddFunction("GetPositionRaw", GetPositionRaw);
             req->AddFunction("GetStatus", GetStatus);
-            req->AddFunction("PosMoveAbsolute", PosMoveAbsolute);
-            req->AddFunction("PosMoveRelative", PosMoveRelative);
+            req->AddFunction("move_jp", move_jp);
+            req->AddFunction("move_jr", move_jr);
             req->AddFunction("SendCommandRet", SendCommandRet);
-            req->AddFunction("GetJointType", GetJointType);
+            req->AddFunction("configuration_js", get_config_js);
             req->AddEventHandlerWrite(&CopleyClient::OnStatusEvent, this, "status");
             req->AddEventHandlerWrite(&CopleyClient::OnWarningEvent, this, "warning");
             req->AddEventHandlerWrite(&CopleyClient::OnErrorEvent, this, "error");
@@ -83,8 +88,8 @@ public:
     void PrintHelp()
     {
         std::cout << "Available commands:" << std::endl
-                  << "  m: absolute position move" << std::endl
-                  << "  r: relative position move" << std::endl
+                  << "  m: absolute position move (move_jp)" << std::endl
+                  << "  r: relative position move (move_jr)" << std::endl
                   << "  c: send command" << std::endl
                   << "  h: display help information" << std::endl
                   << "  q: quit" << std::endl;
@@ -92,20 +97,38 @@ public:
 
     void Startup()
     {
-        GetJointType(jType);
-        if (jType == CMN_JOINT_PRISMATIC) {
-            jtScale = 1000.0;     // meters --> millimeters
-            jtUnits.assign("mm");
+        NumAxes = 0;
+        const mtsGenericObject *p = measured_js.GetArgumentPrototype();
+        const prmStateJoint *psj = dynamic_cast<const prmStateJoint *>(p);
+        if (psj) NumAxes = psj->Position().size();
+        std::cout << "CopleyClient: Detected " << NumAxes << " axes" << std::endl;
+
+        jtgoal.SetSize(NumAxes);
+        jtpos.SetSize(NumAxes);
+        jtScale.SetSize(NumAxes);
+        jtUnits.resize(NumAxes);
+        jtposSet.Goal().SetSize(NumAxes);
+
+        // Get joint configuration
+        get_config_js(m_config_js);
+        // Set jtScale based on joint type (prismatic or revolute)
+        for (size_t i = 0; i < NumAxes; i++) {
+            if (m_config_js.Type()[i] == PRM_JOINT_PRISMATIC) {
+                jtScale[i] = 1000.0;     // meters --> millimeters
+                jtUnits[i].assign("mm");
+            }
+            else if (m_config_js.Type()[i] == PRM_JOINT_REVOLUTE) {
+                jtScale[i] = cmn180_PI;  // radians --> degrees
+                jtUnits[i].assign("deg");
+            }
+            else {
+                std::cout << "CopleyClient: joint " << i << " is unknown type ("
+                          << m_config_js.Type()[i] << ")" << std::endl;
+                jtScale[i] = 1.0;
+                jtUnits[i].assign("cnts");
+            }
         }
-        else if (jType == CMN_JOINT_REVOLUTE) {
-            jtScale = cmn180_PI;  // radians --> degrees
-            jtUnits.assign("deg");
-        }
-        else {
-            std::cout << "CopleyClient: unknown joint type (" << jType << ")" << std::endl;
-            jtScale = 1.0;
-            jtUnits.assign("cnts");
-        }
+
         PrintHelp();
     }
 
@@ -118,28 +141,38 @@ public:
 
         if (copleyOK) {
             GetPositionRaw(mPosRaw);
-            GetPosition(mPos);
+            measured_js(m_measured_js);
+            m_measured_js.GetPosition(jtpos);
             GetStatus(mStatus);
         }
 
+        int i;
         char c = 0;
-        double jtGoal;
         if (cmnKbHit()) {
             c = cmnGetChar();
             switch (c) {
 
             case 'm':   // position move joint
-                std::cout << std::endl << "Enter absolute position (" << jtUnits << "): ";
-                std::cin >> jtGoal;
-                std::cout << "Moving to " << jtGoal << std::endl;
-                PosMoveAbsolute(jtGoal/jtScale);
+                std::cout << std::endl << "Enter absolute position";
+                if (NumAxes == 1)
+                    std::cout << " (" << jtUnits[0] << "): ";
+                for (i = 0; i < NumAxes; i++)
+                    std::cin >> jtgoal[i];
+                std::cout << "Moving to " << jtgoal << std::endl;
+                jtgoal.ElementwiseDivide(jtScale);
+                jtposSet.SetGoal(jtgoal);
+                move_jp(jtposSet);
                 break;
 
             case 'r':   // relative move joint
-                std::cout << std::endl << "Enter relative position (" << jtUnits << "): ";
-                std::cin >> jtGoal;
-                std::cout << "Relative move by " << jtGoal << std::endl;
-                PosMoveRelative(jtGoal/jtScale);
+                std::cout << std::endl << "Enter relative position";
+                if (NumAxes == 1)
+                    std::cout << " (" << jtUnits[0] << "): ";
+                for (i = 0; i < NumAxes; i++)
+                    std::cin >> jtgoal[i];
+                std::cout << "Relative move by " << jtgoal << std::endl;
+                jtposSet.SetGoal(jtgoal);
+                move_jr(jtposSet);
                 break;
 
             case 'c':
@@ -175,19 +208,26 @@ public:
         }
 
         if (copleyOK) {
-            printf("Pos: %8.2lf (%08lx), Status: %08lx", mPos*jtScale, mPosRaw, mStatus);
+            unsigned int axis;
+            printf("Pos:");
+            for (axis = 0; axis < NumAxes; axis++)
+                printf(" %8.2lf (%08lx)", jtpos[axis]*jtScale[axis], mPosRaw[axis]);
+            printf(", Status:");
             unsigned int numChars = 0;
-            if (mStatus & (1<<9)) {
-                printf(", PosLim");
-                numChars += 8;
-            }
-            if (mStatus & (1<<10)) {
-                printf(", NegLim");
-                numChars += 8;
-            }
-            if (mStatus & (1<<27)) {
-                printf(", Moving");
-                numChars += 8;
+            for (axis = 0; axis < NumAxes; axis++) {
+                printf(" %08lx", mStatus[axis]);
+                if (mStatus[axis] & (1<<9)) {
+                    printf(", PosLim");
+                    numChars += 8;
+                }
+                if (mStatus[axis] & (1<<10)) {
+                    printf(", NegLim");
+                    numChars += 8;
+                }
+                if (mStatus[axis] & (1<<27)) {
+                    printf(", Moving");
+                    numChars += 8;
+                }
             }
             if (numChars < numCharsPrev) {
                 for (unsigned int i = numChars; i < numCharsPrev; i++)
