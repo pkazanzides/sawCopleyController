@@ -154,6 +154,12 @@ class {
         visibility public;
     }
     member {
+        name ccx_file;
+        type std::string;
+        default std::string("");
+        visibility public;
+    }
+    member {
         name axes;
         type std::vector<sawCopleyControllerConfig::axis>;
         visibility public;

@@ -191,6 +191,9 @@ void mtsCopleyController::Configure(const std::string& fileName)
         std::cout << this->GetName() << ": configuration completed" << std::endl;
     }
 #endif
+    if (!m_config.ccx_file.empty()) {
+        LoadCCX(m_config.ccx_file);
+    }
 }
 
 void mtsCopleyController::Startup()
@@ -332,7 +335,7 @@ void mtsCopleyController::SendCommandRet(const std::string &cmdString, std::stri
     if (mSerialPort.IsOpened()) {
         int nSent = mSerialPort.Write(cmdString+"\r");
         if (nSent != cmdString.size()+1) {
-            CMN_LOG_RUN_ERROR << "Failed to write " << cmdString << std::endl;
+            CMN_LOG_CLASS_RUN_ERROR << "Failed to write " << cmdString << std::endl;
             retString.assign("Failed to write command");
             return;
         }
@@ -463,4 +466,63 @@ void mtsCopleyController::SaveParameters(const std::string &fileName)
             csvFile << "ERROR";
         csvFile << std::dec << std::endl;
     }
+}
+
+bool mtsCopleyController::LoadCCX(const std::string &fileName)
+{
+    // CCX File Format
+    // First line:  version number (14)
+    // Second line:  number of axes (1)
+    // Subsequent lines are data, of format
+    //    param-id (hex), axis-num (0), name, value
+    // In most cases, value is a decimal integer, but there are some special cases:
+    //    - strings
+    //    - multiple values, which are separated by colon, e.g., 0:1:2
+    // Special cases:
+    //    - param-ids 70-77 (programmable outputs) require 3 values, in hex
+    //    - param-id 95 is host config state; used by host software
+    char buf[128];
+    std::ifstream ccxFile(fileName.c_str());
+    if (!ccxFile.is_open()) {
+        CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to open " << fileName << std::endl;
+        return false;
+    }
+    CMN_LOG_CLASS_INIT_VERBOSE << "LoadCCX: parsing file " << fileName << std::endl;
+    ccxFile.getline(buf, sizeof(buf));
+    unsigned int fileVer;
+    if (sscanf(buf, "%d", &fileVer) != 1) {
+        CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to parse file version from [" << buf << "]" << std::endl;
+        return false;
+    }
+    if ((fileVer != 13) && (fileVer != 14))
+        CMN_LOG_CLASS_INIT_WARNING << "LoadCCX: unsupported file version " << fileVer << std::endl;
+    ccxFile.getline(buf, sizeof(buf));
+    unsigned int numAxes;
+    if (sscanf(buf, "%d", &numAxes) != 1) {
+        CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to parse number of axes from [" << buf << "]" << std::endl;
+        return false;
+    }
+    if (numAxes != mNumAxes) {
+        CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: inconsistent number of axes (json " << mNumAxes
+                                 << ", ccx " << numAxes << ")" << std::endl;
+        return false;
+    }
+    while (ccxFile.good()) {
+        ccxFile.getline(buf, sizeof(buf));
+        unsigned int param, axis, nchars;
+        if (sscanf(buf, "%x,%d,%n", &param, &axis, &nchars) != 2) {
+            CMN_LOG_CLASS_INIT_WARNING << "LoadCCX: failed to parse line [" << buf << "]" << std::endl;
+            continue;
+        }
+        char *name = strtok(buf+nchars, ",\n");
+        if (!name) {
+            CMN_LOG_CLASS_INIT_WARNING << "LoadCCX: failed to parse parameter name, param " << std::hex
+                                       << param << std::dec << std::endl;
+            continue;
+        }
+        char *valueStr = strtok(0, ",\n");
+        std::cout << "Parameter " << std::hex << param << ", axis " << axis << ", name " << name
+                  << ", value " << valueStr << std::endl;
+    }
+    return true;
 }

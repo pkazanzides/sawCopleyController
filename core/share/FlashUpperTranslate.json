@@ -3,6 +3,7 @@
     "name": "FlashUpperTranslate",
     "port_name": "COM7",
     "baud_rate": 115200,
+    "ccx_file": "FlashUpperTranslate.ccx",
     "axes": [ {
         "type": "PRISMATIC",
         "position_bits_to_SI": {

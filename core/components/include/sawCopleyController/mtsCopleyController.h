@@ -75,6 +75,7 @@ protected:
     void Close();
 
     void SetupInterfaces();
+    bool LoadCCX(const std::string &fileName);
 
     // Send the command to the drive; returns 0 on success
     // For a read command, result returned in value
