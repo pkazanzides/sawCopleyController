@@ -271,12 +271,14 @@ int mtsCopleyController::SendCommand(const char *cmd, int len, long *value, unsi
                 }
                 else if ((strncmp(respBuf, "v ", 2) == 0) ||
                          (strncmp(respBuf, "r ", 2) == 0)) {
+                    rc = 0;
                     if (value) {
                         unsigned int nchars;
                         char *p = respBuf+2;
                         for (unsigned int i = 0; i < num; i++) {
                             if (sscanf(p, "%d%n", value+i, &nchars) != 1) {
                                 sprintf(msgBuf, "SendCommand %s: failed to parse response %s", cmd, respBuf);
+                                rc = -1;
                                 break;
                             }
                             p += nchars;
@@ -597,20 +599,37 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                     continue;
                 }
                 long curValues[3];
-                ParameterGetArray(param, curValues, 3, axis);
-                if ((values[0] != curValues[0]) || (values[1] != curValues[1]) || (values[2] != curValues[2])) {
-                    std::cout << "updating from " << std::hex << curValues[0] << ", " << curValues[1]
-                              << ", " << curValues[2] << " to " << values[0] << ", " << values[1]
-                              << ", " << values[2] << std::dec << std::endl;
-                    ParameterSetArray(param, values, 3, axis);
+                if (ParameterGetArray(param, curValues, 3, axis) == 0) {
+                    if ((values[0] != curValues[0]) || (values[1] != curValues[1]) || (values[2] != curValues[2])) {
+                        std::cout << "updating from " << std::hex << curValues[0] << ", " << curValues[1]
+                                  << ", " << curValues[2] << " to " << values[0] << ", " << values[1]
+                                  << ", " << values[2] << std::dec << std::endl;
+                        ParameterSetArray(param, values, 3, axis);
+                    }
+                    else {
+                        std::cout << "already set to " << std::hex << values[0] << ", " << values[1]
+                                  << ", " << values[2] << std::dec << std::endl;
+                    }
                 }
                 else {
-                    std::cout << "already set to " << std::hex << values[0] << ", " << values[1]
-                              << ", " << values[2] << std::dec << std::endl;
+                    std::cout << "failed to read current values, not updating" << std::endl;
                 }
             }
             else if (it->second == FLAGS_ARRAY9) {
-                std::cout << "filter parameters not yet supported" << std::endl;
+                long curValues[9];
+                if (ParameterGetArray(param, curValues, 9, axis) == 0) {
+                    std::cout << "Current values:";
+                    for (unsigned int i = 0; i < 9; i++)
+                        std::cout << " " << curValues[i];
+                    std::cout << ", TODO: UPDATE" << std::endl;
+                }
+                else {
+                    std::cout << "failed to read current values" << std::endl;
+                }
+            }
+            else {
+                // Should not happen
+                std::cout << "unsupported parameter" << std::endl;
             }
         }
     }
