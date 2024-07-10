@@ -198,9 +198,6 @@ void mtsCopleyController::Configure(const std::string& fileName)
 
 void mtsCopleyController::Startup()
 {
-    //std::cout << this->GetName() << ": saving parameters to file" << std::endl;
-    //SaveParameters(m_config.name + ".csv");
-    //std::cout << this->GetName() << ": finished saving parameters" << std::endl;
 }
 
 void mtsCopleyController::Run()
@@ -240,7 +237,7 @@ void mtsCopleyController::Cleanup(){
     Close();
 }
 
-int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
+int mtsCopleyController::SendCommand(const char *cmd, int len, long *value, unsigned int num)
 {
     int rc = -1;
 #ifndef SIMULATION
@@ -275,8 +272,15 @@ int mtsCopleyController::SendCommand(const char *cmd, int len, long *value)
                 else if ((strncmp(respBuf, "v ", 2) == 0) ||
                          (strncmp(respBuf, "r ", 2) == 0)) {
                     if (value) {
-                        if (sscanf(respBuf+2, "%d", value) != 1)
-                            sprintf(msgBuf, "SendCommand %s: failed to parse response %s", cmd, respBuf);
+                        unsigned int nchars;
+                        char *p = respBuf+2;
+                        for (unsigned int i = 0; i < num; i++) {
+                            if (sscanf(p, "%d%n", value+i, &nchars) != 1) {
+                                sprintf(msgBuf, "SendCommand %s: failed to parse response %s", cmd, respBuf);
+                                break;
+                            }
+                            p += nchars;
+                        }
                     }
                     else {
                         sprintf(msgBuf, "SendCommand %s: ignoring response %s", cmd, respBuf);
@@ -327,6 +331,38 @@ int mtsCopleyController::ParameterGet(unsigned int addr, long &value, unsigned i
     char bank = inRAM ? 'r' : 'f';
     sprintf(p, "g %c0x%x\r", bank, addr);
     return SendCommand(cmdBuf, static_cast<int>(strlen(cmdBuf)), &value);
+}
+
+int mtsCopleyController::ParameterSetArray(unsigned int addr, long *value, unsigned int num,
+                                           unsigned int axis, bool inRAM)
+{
+    char *p = cmdBuf;
+    if (mNumAxes != 1) {
+        sprintf(p, ".%c ", 'A'+axis);
+        p += 3;
+    }
+    char bank = inRAM ? 'r' : 'f';
+    sprintf(p, "s %c0x%x", bank, addr);
+    p += strlen(p);
+    for (unsigned int i = 0; i < num; i++) {
+        sprintf(p, " %d", value[i]);
+        p += strlen(p);
+    }
+    sprintf(p, "\r");
+    return SendCommand(cmdBuf, static_cast<int>(strlen(cmdBuf)));
+}
+
+int mtsCopleyController::ParameterGetArray(unsigned int addr, long *value, unsigned int num,
+                                           unsigned int axis, bool inRAM)
+{
+    char *p = cmdBuf;
+    if (mNumAxes != 1) {
+        sprintf(p, ".%c ", 'A'+axis);
+        p += 3;
+    }
+    char bank = inRAM ? 'r' : 'f';
+    sprintf(p, "g %c0x%x\r", bank, addr);
+    return SendCommand(cmdBuf, static_cast<int>(strlen(cmdBuf)), value, num);
 }
 
 void mtsCopleyController::SendCommandRet(const std::string &cmdString, std::string &retString)
@@ -405,68 +441,70 @@ void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &g
 #endif
 }
 
-// For testing
+unsigned int FLAGS_DEFAULT   = 0x0;  // single decimal integer, update if different
+unsigned int FLAGS_NO_UPDATE = 0x1;  // single decimal integer, do not update
+unsigned int FLAGS_ARRAY3H   = 0x2;  // array of 3 hex values
+unsigned int FLAGS_ARRAY9    = 0x4;  // array of 9 decimal values
 
-struct ParameterList {
-    unsigned int addr;
-    std::string desc;
-};
-
-ParameterList parms[] = { // Programmed Position Mode Parameters
-                          { 0xc8, "profile type"   },
-                          { 0xcb, "max velocity"   },
-                          { 0xcc, "max accel"      },
-                          { 0xcd, "max decel"      },
-                          // Homing Mode Parameters
-                          { 0xc2, "homing method"  },
-                          { 0xc3, "fast vel"       },
-                          { 0xc4, "slow vel"       },
-                          { 0xc5, "accel/decel"    },
-                          { 0xc6, "home offset"    },
-                          { 0xc7, "current limit"  },
-                          { 0xb8, "swlim+"         },
-                          { 0xb9, "swlim-"         },
-                          // Current Loop Limits Parameters
-                          { 0x21, "peak current"   },
-                          { 0x22, "cont current"   },
-                          { 0x23, "I2T time"       },
-                          { 0xae, "current offset" },
-                          // Current Loop Gains Parameters
-                          { 0x00, "Cp"             },
-                          { 0x01, "Ci"             },
-                          // Velocity Loop Limits Parameters
-                          { 0x3a, "vel limit"      },
-                          { 0x36, "accel limit"    },
-                          { 0x37, "decel limit"    },
-                          { 0xcf, "fast stop ramp" },
-                          // Velocity Loop Gains Parameters
-                          { 0x27, "Vp",            },
-                          { 0x28, "Vi",            },
-                          // Position Loop Gains Parameters
-                          { 0x30, "Pp"             },
-                          { 0x33, "vel ff"         },
-                          { 0x34, "accel ff"       },
-                          { 0xe3, "gain mult"      }
+typedef std::map<unsigned int, unsigned int> ParameterMap;
+ParameterMap parms = {   // Programmed Position Mode Parameters
+                         { 0xc8, FLAGS_DEFAULT  },    // Profile mode
+                         { 0xca, FLAGS_DEFAULT  },    // Position command
+                         { 0xcb, FLAGS_DEFAULT  },    // Max velocity
+                         { 0xcc, FLAGS_DEFAULT  },    // Max accel
+                         { 0xcd, FLAGS_DEFAULT  },    // Max decel
+                         { 0xce, FLAGS_DEFAULT  },    // Max jerk
+                         { 0xcf, FLAGS_DEFAULT  },    // Abort decel
+                         // Homing Mode Parameters
+                         { 0xc2, FLAGS_DEFAULT  },    // Home configuration
+                         { 0xc3, FLAGS_DEFAULT  },    // Home velocity fast
+                         { 0xc4, FLAGS_DEFAULT  },    // Home velocity slow
+                         { 0xc5, FLAGS_DEFAULT  },    // Home accel/decel
+                         { 0xc6, FLAGS_NO_UPDATE },   // Home offset
+                         { 0xc7, FLAGS_DEFAULT  },    // Home current
+                         { 0xb8, FLAGS_DEFAULT  },    // Positive software limit
+                         { 0xb9, FLAGS_DEFAULT  },    // Negative software limit
+                         { 0xbf, FLAGS_DEFAULT  },    // Home current delay time
+                         // Current Loop Limits Parameters
+                         { 0x21, FLAGS_DEFAULT  },    // Peak current
+                         { 0x22, FLAGS_DEFAULT  },    // Continuous current
+                         { 0x23, FLAGS_DEFAULT  },    // Peak current time limit
+                         { 0xae, FLAGS_DEFAULT  },    // Current offset
+                         // Current Loop Gains Parameters
+                         { 0x00, FLAGS_DEFAULT },     // Cp
+                         { 0x01, FLAGS_DEFAULT },     // Ci
+                         { 0x02, FLAGS_DEFAULT },     // Programmed current
+                         { 0x6a, FLAGS_DEFAULT },     // Commanded current ramp
+                         // Velocity Loop Limits Parameters
+                         { 0x2f, FLAGS_DEFAULT },     // Programmed velocity
+                         { 0x36, FLAGS_DEFAULT },     // Accel limit
+                         { 0x37, FLAGS_DEFAULT },     // Decel limit
+                         { 0x39, FLAGS_DEFAULT },     // Fast stop ramp
+                         { 0x3a, FLAGS_DEFAULT },     // Velocity limit
+                         // Velocity Loop Gains Parameters
+                         { 0x27, FLAGS_DEFAULT },     // Vp
+                         { 0x28, FLAGS_DEFAULT },     // Vi
+                         // Position Loop Gains Parameters
+                         { 0x30, FLAGS_DEFAULT },     // Pp
+                         { 0x33, FLAGS_DEFAULT },     // Vel ff
+                         { 0x34, FLAGS_DEFAULT },     // Accel ff
+                         { 0xe3, FLAGS_DEFAULT },     // Gain mult
+                         // Status and state
+                         { 0x24, FLAGS_NO_UPDATE },   // Desired state
+                         // Filters
+                         // Documentation states 9 values, but ccx file seems to have 7
+                         { 0x5f, FLAGS_ARRAY9 },      // Velocity loop output filter
+                         { 0x6b, FLAGS_ARRAY9 },      // Velocity loop command filter
+                         // Output configuration
+                         { 0x70, FLAGS_ARRAY3H },     // Output 1 config
+                         { 0x71, FLAGS_ARRAY3H },     // Output 2 config
+                         { 0x72, FLAGS_ARRAY3H },     // Output 3 config
+                         { 0x73, FLAGS_ARRAY3H },     // Output 4 config
+                         { 0x74, FLAGS_ARRAY3H },     // Output 5 config
+                         { 0x75, FLAGS_ARRAY3H },     // Output 6 config
+                         { 0x76, FLAGS_ARRAY3H },     // Output 7 config
+                         { 0x77, FLAGS_ARRAY3H }      // Output 8 config
                         };
-
-void mtsCopleyController::SaveParameters(const std::string &fileName)
-{
-    std::ofstream csvFile(fileName.c_str());
-    size_t numParms = sizeof(parms)/sizeof(ParameterList);
-    for (size_t i = 0; i < numParms; i++) {
-        csvFile << parms[i].desc << ", " << std::hex << parms[i].addr << ", ";
-        long fromRAM, fromFlash;
-        if (ParameterGet(parms[i].addr, fromRAM) == 0)
-            csvFile << std::hex << fromRAM << ", ";
-        else
-            csvFile << "ERROR, ";
-        if (ParameterGet(parms[i].addr, fromFlash, false) == 0)
-            csvFile << std::hex << fromFlash;
-        else
-            csvFile << "ERROR";
-        csvFile << std::dec << std::endl;
-    }
-}
 
 bool mtsCopleyController::LoadCCX(const std::string &fileName)
 {
@@ -521,8 +559,60 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
             continue;
         }
         char *valueStr = strtok(0, ",\n");
-        std::cout << "Parameter " << std::hex << param << ", axis " << axis << ", name " << name
-                  << ", value " << valueStr << std::endl;
+        ParameterMap::const_iterator it;
+        it = parms.find(param);
+        if (it != parms.end()) {
+            std::cout << "Parameter " << std::hex << param << std::dec << ", axis " << axis
+                      << ", " << name << ": ";
+            if ((it->second == FLAGS_DEFAULT) || (it->second == FLAGS_NO_UPDATE)) {
+                long value;
+                if (sscanf(valueStr, "%d", &value) != 1) {
+                    std::cout << "parse error" << std::endl;
+                    CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to parse parameter value, param " << std::hex
+                                             << param << " from [" << valueStr << "]" << std::dec << std::endl;
+                    continue;
+                }
+                long curValue;
+                ParameterGet(param, curValue, axis);
+                if (value != curValue) {
+                    if (it->second == FLAGS_DEFAULT) {
+                        std::cout << "updating from " << curValue << " to " << value << std::endl;
+                        ParameterSet(param, value, axis);
+                    }
+                    else {
+                        std::cout << "current value is " << curValue << ", not updating to "
+                                  << value << std::endl;
+                    }
+                }
+                else {
+                    std::cout << "already set to " << value << std::endl;
+                }
+            }
+            else if (it->second == FLAGS_ARRAY3H) {
+                long values[3];
+                if (sscanf(valueStr, "%x:%x:%x", &values[0], &values[1], &values[2]) != 3) {
+                    std::cout << "parse error" << std::endl;
+                    CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to parse parameter values (3H), param " << std::hex
+                                             << param << " from [" << valueStr << "]" << std::dec << std::endl;
+                    continue;
+                }
+                long curValues[3];
+                ParameterGetArray(param, curValues, 3, axis);
+                if ((values[0] != curValues[0]) || (values[1] != curValues[1]) || (values[2] != curValues[2])) {
+                    std::cout << "updating from " << std::hex << curValues[0] << ", " << curValues[1]
+                              << ", " << curValues[2] << " to " << values[0] << ", " << values[1]
+                              << ", " << values[2] << std::dec << std::endl;
+                    ParameterSetArray(param, values, 3, axis);
+                }
+                else {
+                    std::cout << "already set to " << std::hex << values[0] << ", " << values[1]
+                              << ", " << values[2] << std::dec << std::endl;
+                }
+            }
+            else if (it->second == FLAGS_ARRAY9) {
+                std::cout << "filter parameters not yet supported" << std::endl;
+            }
+        }
     }
     return true;
 }

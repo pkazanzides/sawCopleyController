@@ -79,13 +79,13 @@ protected:
 
     // Send the command to the drive; returns 0 on success
     // For a read command, result returned in value
-    int SendCommand(const char *cmd, int len, long *value = 0);
+    int SendCommand(const char *cmd, int len, long *value = 0, unsigned int num = 1);
 
     int ParameterSet(unsigned int addr, long value, unsigned int axis = 0, bool inRAM = true);
     int ParameterGet(unsigned int addr, long &value, unsigned int axis = 0, bool inRAM = true);
 
-    // For testing
-    void SaveParameters(const std::string &fileName);
+    int ParameterSetArray(unsigned int addr, long *value, unsigned int num, unsigned int axis = 0, bool inRAM = true);
+    int ParameterGetArray(unsigned int addr, long *value, unsigned int num, unsigned int axis = 0, bool inRAM = true);
 
     // Methods for provided interface
     void GetConnected(bool &val) const { val = mSerialPort.IsOpened(); }
