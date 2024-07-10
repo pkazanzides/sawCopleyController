@@ -7,8 +7,9 @@
     "axes": [ {
         "type": "PRISMATIC",
         "position_bits_to_SI": {
-           "scale":  500000,
+           "scale":  100000000,
            "offset": 0
-        }
+        },
+	"home_pos": -0.01  // meters
     } ]
 }

@@ -62,6 +62,8 @@ private:
     mtsFunctionRead GetAccel;
     mtsFunctionWrite SetDecel;
     mtsFunctionRead GetDecel;
+    mtsFunctionVoid crtk_enable;
+    mtsFunctionVoid crtk_disable;
     mtsFunctionVoid Home;
 
     void OnStatusEvent(const mtsMessage &msg) {
@@ -93,6 +95,8 @@ public:
             req->AddFunction("GetAccel", GetAccel);
             req->AddFunction("SetDecel", SetDecel);
             req->AddFunction("GetDecel", GetDecel);
+            req->AddFunction("EnableMotorPower", crtk_enable);
+            req->AddFunction("DisableMotorPower", crtk_disable);
             req->AddFunction("Home", Home);
             req->AddEventHandlerWrite(&CopleyClient::OnStatusEvent, this, "status");
             req->AddEventHandlerWrite(&CopleyClient::OnWarningEvent, this, "warning");
@@ -112,6 +116,8 @@ public:
                   << "  d: set decel" << std::endl
                   << "  c: send command" << std::endl
                   << "  h: display help information" << std::endl
+                  << "  e: enable motor power" << std::endl
+                  << "  n: disable motor power" << std::endl
                   << "  z: home robot" << std::endl
                   << "  q: quit" << std::endl;
     }
@@ -179,7 +185,8 @@ public:
             case 'm':   // position move joint
                 std::cout << std::endl << "Enter absolute position";
                 if (NumAxes == 1)
-                    std::cout << " (" << jtUnits[0] << "): ";
+                    std::cout << " (" << jtUnits[0] << ")";
+                std::cout << ": ";
                 for (i = 0; i < NumAxes; i++)
                     std::cin >> jtgoal[i];
                 std::cout << "Moving to " << jtgoal << std::endl;
@@ -191,10 +198,12 @@ public:
             case 'r':   // relative move joint
                 std::cout << std::endl << "Enter relative position";
                 if (NumAxes == 1)
-                    std::cout << " (" << jtUnits[0] << "): ";
+                    std::cout << " (" << jtUnits[0] << ")";
+                std::cout << ": ";
                 for (i = 0; i < NumAxes; i++)
                     std::cin >> jtgoal[i];
                 std::cout << "Relative move by " << jtgoal << std::endl;
+                jtgoal.ElementwiseDivide(jtScale);
                 jtposSet.SetGoal(jtgoal);
                 move_jr(jtposSet);
                 break;
@@ -205,8 +214,14 @@ public:
                 std::cout << std::endl << "Current speed: " << jtSpeed;
                 if (NumAxes == 1)
                     std::cout << " " << jtUnits[0] << "/s";
-                std::cout << std::endl;
-                // TODO: set speed
+                std::cout << std::endl << "Enter new speed";
+                if (NumAxes == 1)
+                    std::cout << " (" << jtUnits[0] << "/s)";
+                std::cout << ": ";
+                for (i = 0; i < NumAxes; i++)
+                    std::cin >> jtSpeed[i];
+                jtSpeed.ElementwiseDivide(jtScale);
+                SetSpeed(jtSpeed);
                 break;
 
             case 'a':  // set accel
@@ -215,8 +230,14 @@ public:
                 std::cout << std::endl << "Current accel: " << jtAccel;
                 if (NumAxes == 1)
                     std::cout << " " << jtUnits[0] << "/s^2";
-                std::cout << std::endl;
-                // TODO: set accel
+                std::cout << std::endl << "Enter new accel";
+                if (NumAxes == 1)
+                    std::cout << " (" << jtUnits[0] << "/s^2)";
+                std::cout << ": ";
+                for (i = 0; i < NumAxes; i++)
+                    std::cin >> jtAccel[i];
+                jtAccel.ElementwiseDivide(jtScale);
+                SetAccel(jtAccel);
                 break;
 
             case 'd':  // set decel
@@ -225,8 +246,14 @@ public:
                 std::cout << std::endl << "Current decel: " << jtDecel;
                 if (NumAxes == 1)
                     std::cout << " " << jtUnits[0] << "/s^2";
-                std::cout << std::endl;
-                // TODO: set decel
+                std::cout << std::endl << "Enter new decel";
+                if (NumAxes == 1)
+                    std::cout << " (" << jtUnits[0] << "/s^2)";
+                std::cout << ": ";
+                for (i = 0; i < NumAxes; i++)
+                    std::cin >> jtDecel[i];
+                jtDecel.ElementwiseDivide(jtScale);
+                SetDecel(jtDecel);
                 break;
 
             case 'c':
@@ -251,6 +278,14 @@ public:
             case 'h':
                 std::cout << std::endl;
                 PrintHelp();
+                break;
+
+            case 'e':   // enable motor power
+                crtk_enable();
+                break;
+
+            case 'n':   // disable motor power
+                crtk_disable();
                 break;
 
             case 'z':
@@ -287,6 +322,14 @@ public:
                 if (mStatus[axis] & (1<<10)) {
                     printf(", NegLim");
                     numChars += 8;
+                }
+                if (mStatus[axis] & (1<<12)) {
+                    printf(", Disabled");
+                    numChars += 10;
+                }
+                if (mStatus[axis] & (1<<26)) {
+                    printf(", Home");
+                    numChars += 6;
                 }
                 if (mStatus[axis] & (1<<27)) {
                     printf(", Moving");

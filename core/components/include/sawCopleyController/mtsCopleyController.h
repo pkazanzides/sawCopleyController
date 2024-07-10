@@ -78,6 +78,8 @@ protected:
     vctDoubleVec mAccel;                    // Max accel for position move
     vctDoubleVec mDecel;                    // Max decel for position move
 
+    vctUIntVec mState;                      // Internal state machine
+
     void Init();
     void Close();
 
@@ -111,6 +113,11 @@ protected:
     void SetSpeed(const vctDoubleVec &spd);
     void SetAccel(const vctDoubleVec &accel);
     void SetDecel(const vctDoubleVec &decel);
+
+    // Enable motor power
+    void EnableMotorPower(void);
+    // Disable motor power
+    void DisableMotorPower(void);
 
     // Home: all axes
     void HomeAll();

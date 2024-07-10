@@ -114,11 +114,11 @@ bc,0,Position Tracking Window,2500
 bd,0,Position Tracking Window Time,10
 bf,0,Home Current Delay Time,250
 c1,0,Node ID configuration,2048
-c2,0,Home Configuration,0
-c3,0,Home Velocity Fast,186667
+c2,0,Home Configuration,546
+c3,0,Home Velocity Fast,100000
 c4,0,Home Velocity Slow,36667
 c5,0,Home Accel/Decel,38000
-c6,0,Home Offset,0
+c6,0,Home Offset,-106500
 c7,0,Home Current,113
 c8,0,Trajectory Profile Mode,256
 ca,0,Trajectory Position Command,0

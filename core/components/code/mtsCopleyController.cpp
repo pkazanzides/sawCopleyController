@@ -28,6 +28,7 @@ const double VelocityBitsToCps = 0.1;        // counts/second
 const double AccelBitsToCps2 = 10.0;         // counts/s^2
 const double AccelLimitBitsToCps2 = 1000.0;  // counts/s^2
 
+enum COPLEY_STATES { ST_IDLE, ST_HOMING, ST_MOVING };
 
 CMN_IMPLEMENT_SERVICES_DERIVED_ONEARG(mtsCopleyController, mtsTaskContinuous, mtsStdString)
 
@@ -74,6 +75,9 @@ void mtsCopleyController::SetupInterfaces(void)
         mInterface->AddCommandWrite(&mtsCopleyController::move_jp, this, "move_jp");
         mInterface->AddCommandWrite(&mtsCopleyController::move_jr, this, "move_jr");
         mInterface->AddCommandRead(&mtsCopleyController::GetConfig_js, this, "configuration_js");
+
+        mInterface->AddCommandVoid(&mtsCopleyController::EnableMotorPower, this, "EnableMotorPower");
+        mInterface->AddCommandVoid(&mtsCopleyController::DisableMotorPower, this, "DisableMotorPower");
 
         mInterface->AddCommandRead(&mtsCopleyController::GetConnected, this, "GetConnected");
         mInterface->AddCommandWriteReturn(&mtsCopleyController::SendCommandRet, this, "SendCommandRet");
@@ -147,6 +151,9 @@ void mtsCopleyController::Configure(const std::string& fileName)
     mSpeed.SetSize(mNumAxes);
     mAccel.SetSize(mNumAxes);
     mDecel.SetSize(mNumAxes);
+    // Internal state
+    mState.SetSize(mNumAxes);
+    mState.SetAll(ST_IDLE);
 
     for (axis = 0; axis < mNumAxes; axis++) {
         sawCopleyControllerConfig::axis &axisData = m_config.axes[axis];
@@ -275,6 +282,7 @@ void mtsCopleyController::Startup()
 
 void mtsCopleyController::Run()
 {
+    unsigned int axis;
 #ifndef SIMULATION
     if (mSerialPort.IsOpened()) {
         long posRaw, status;
@@ -289,7 +297,7 @@ void mtsCopleyController::Run()
         }
     }
 #else
-    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+    for (axis = 0; axis < mNumAxes; axis++) {
         mPosRaw[axis] = 0;
         m_measured_js.Position()[axis] = 0.0;
         mStatus[axis] = 0;
@@ -304,6 +312,45 @@ void mtsCopleyController::Run()
     RunEvent();
 
     ProcessQueuedCommands();
+
+    for (axis = 0; axis < mNumAxes; axis++) {
+
+        if (mState[axis] != ST_IDLE) {
+
+            long trajStatus;
+            if (ParameterGet(0xc9, trajStatus, axis) == 0) {
+                if (mState[axis] == ST_HOMING) {
+                    if (trajStatus & (1<<11)) {
+                        sprintf(msgBuf, "Home: error on axis %d", axis);
+                        mInterface->SendError(msgBuf);
+                        mState[axis] = ST_IDLE;
+                    }
+                    else if (trajStatus & (1<<12)) {
+                        sprintf(msgBuf, "Home: axis %d finished", axis);
+                        mInterface->SendStatus(msgBuf);
+                        mState[axis] = ST_IDLE;
+                    }
+                    else if (!(trajStatus & (1<<13))) {
+                        sprintf(msgBuf, "Home: not active on axis %d", axis);
+                        mInterface->SendWarning(msgBuf);
+                    }
+                }
+                else if (mState[axis] == ST_MOVING) {
+                    if (trajStatus & (1<<14)) {
+                        sprintf(msgBuf, "Motion aborted on axis %d", axis);
+                        mInterface->SendWarning(msgBuf);
+                        mState[axis] = ST_IDLE;
+                    }
+                    else if (!(trajStatus & (1<<15))) {
+                        sprintf(msgBuf, "Motion completed on axis %d", axis);
+                        mInterface->SendStatus(msgBuf);
+                        mState[axis] = ST_IDLE;
+                    }
+                }
+            }
+        }
+    }
+
 }
 
 void mtsCopleyController::Cleanup(){
@@ -485,10 +532,18 @@ void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &g
 #ifndef SIMULATION
     unsigned int axis;
     for (axis = 0; axis < mNumAxes; axis++) {
-        ParameterSet(0xc8, profile_type, axis);
-        long goalCnts = static_cast<long>(goal[axis]/m_config.axes[axis].position_bits_to_SI.scale);
-        ParameterSet(0xca, goalCnts, axis);  // Position goal
-        // TODO: set velocity, accel, decel
+        if (ParameterSet(0xc8, profile_type, axis) != 0) {
+            sprintf(msgBuf, "%s: failed to set profile_type to %d for axis %d", cmdName, profile_type, axis);
+            mInterface->SendError(msgBuf);
+            return;
+        }
+        long goalCnts = static_cast<long>(goal[axis]*m_config.axes[axis].position_bits_to_SI.scale);
+        if (ParameterSet(0xca, goalCnts, axis) != 0) {
+            sprintf(msgBuf, "%s: failed to set position goal to %ld for axis %d", cmdName, goalCnts, axis);
+            mInterface->SendError(msgBuf);
+            return;
+        }
+        mInterface->SendStatus(msgBuf);
         long desiredState = -1;
         ParameterGet(0x24, desiredState, axis);
         if (desiredState != 21) {
@@ -508,9 +563,14 @@ void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &g
             sprintf(cmdBuf, ".%c t 1\r", 'A'+axis);
             rc = SendCommand(cmdBuf, 7);
         }
-        if (rc != 0) {
-            sprintf(msgBuf, "%s: axis %d, error %d", cmdName, axis, rc);
+        if (rc == 0) {
+            sprintf(msgBuf, "%s: motion start on axis %d", cmdName, axis);
             mInterface->SendStatus(msgBuf);
+            mState[axis] = ST_MOVING;
+        }
+        else {
+            sprintf(msgBuf, "%s: axis %d, error %d", cmdName, axis, rc);
+            mInterface->SendError(msgBuf);
         }
     }
 #endif
@@ -564,12 +624,76 @@ void mtsCopleyController::SetDecel(const vctDoubleVec &decel)
     }
 }
 
+// Enable motor power
+void mtsCopleyController::EnableMotorPower(void)
+{
+    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+        ParameterSet(0x24, 21, axis);
+    }
+}
+
+// Disable motor power
+void mtsCopleyController::DisableMotorPower(void)
+{
+    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+        if (ParameterSet(0x24, 0, axis) == 0)
+            mState[axis] = ST_IDLE;
+        else
+            mInterface->SendError("DisableMotorPower failed");
+    }
+}
+
 void mtsCopleyController::HomeAll()
 {
+    vctBoolVec mask(mNumAxes, true);
+    Home(mask);
 }
 
 void mtsCopleyController::Home(const vctBoolVec &mask)
 {
+    unsigned int axis;
+    // First loop sets up axes for homing. It assumes that all homing parameters, except home offset,
+    // are set by the ccx file.
+    for (axis = 0; axis < mNumAxes; axis++) {
+        if (mask[axis]) {
+            // Set home offset
+            long homeOffsetRaw = static_cast<long>(m_config.axes[axis].home_pos*m_config.axes[axis].position_bits_to_SI.scale);
+            sprintf(msgBuf, "Home: setting home offset for axis %d to %ld", axis, homeOffsetRaw);
+            mInterface->SendStatus(msgBuf);
+            ParameterSet(0xc6, homeOffsetRaw, axis);
+            long desiredState = -1;
+            ParameterGet(0x24, desiredState, axis);
+            if (desiredState != 21) {
+                sprintf(msgBuf, "Home: changing state for axis %d from %ld to 21", axis, desiredState);
+                mInterface->SendStatus(msgBuf);
+                ParameterSet(0x24, 21, axis);
+            }
+        }
+    }
+    // Second loop starts homing on each masked axis
+    // Note that newer multi-axis drives allow the axes to be specified in the command code;
+    // the following code could be updated to use that feature.
+    for (axis = 0; axis < mNumAxes; axis++) {
+        if (mask[axis]) {
+            int rc;
+            if (mNumAxes == 1) {
+                rc = SendCommand("t 2\r", 4);
+            }
+            else {
+                sprintf(cmdBuf, ".%c t 2\r", 'A'+axis);
+                rc = SendCommand(cmdBuf, 7);
+            }
+            if (rc == 0) {
+                sprintf(msgBuf, "Home: axis %d starting", axis);
+                mInterface->SendStatus(msgBuf);
+                mState[axis] = ST_HOMING;
+            }
+            else {
+                sprintf(msgBuf, "Home: axis %d, error %d", axis, rc);
+                mInterface->SendError(msgBuf);
+            }
+        }
+    }
 }
 
 unsigned int FLAGS_DEFAULT   = 0x0;  // single decimal integer, update if different
@@ -587,7 +711,7 @@ ParameterMap parms = {   // Programmed Position Mode Parameters
                          { 0xce, FLAGS_DEFAULT  },    // Max jerk, units 100 cnts/s^3
                          { 0xcf, FLAGS_DEFAULT  },    // Abort decel, units 10 cnts/s^2
                          // Homing Mode Parameters
-                         { 0xc2, FLAGS_NO_UPDATE },   // Home configuration
+                         { 0xc2, FLAGS_DEFAULT },     // Home configuration
                          { 0xc3, FLAGS_DEFAULT  },    // Home velocity fast, units cnts/s
                          { 0xc4, FLAGS_DEFAULT  },    // Home velocity slow, units cnts/s
                          { 0xc5, FLAGS_DEFAULT  },    // Home accel/decel, units 10 cnts/s^2
@@ -670,6 +794,7 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
     //    - param-ids 70-77 (programmable outputs) require 3 values, in hex
     //    - param-id 95 is host config state; used by host software
     char buf[128];
+    char mbuf[128];
     std::ifstream ccxFile(fileName.c_str());
     if (!ccxFile.is_open()) {
         CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to open " << fileName << std::endl;
@@ -712,12 +837,11 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
         ParameterMap::const_iterator it;
         it = parms.find(param);
         if (it != parms.end()) {
-            std::cout << "Parameter " << std::hex << param << std::dec << ", axis " << axis
-                      << ", " << name << ": ";
+            sprintf(mbuf, "Parameter %x, axis %d, %s: ", param, axis, name);
             if ((it->second == FLAGS_DEFAULT) || (it->second == FLAGS_NO_UPDATE)) {
                 long value;
                 if (sscanf(valueStr, "%d", &value) != 1) {
-                    std::cout << "parse error" << std::endl;
+                    std::cout << mbuf << "parse error" << std::endl;
                     CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to parse parameter value, param " << std::hex
                                              << param << " from [" << valueStr << "]" << std::dec << std::endl;
                     continue;
@@ -726,22 +850,22 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                 ParameterGet(param, curValue, axis);
                 if (value != curValue) {
                     if (it->second == FLAGS_DEFAULT) {
-                        std::cout << "updating from " << curValue << " to " << value << std::endl;
+                        std::cout << mbuf << "updating from " << curValue << " to " << value << std::endl;
                         ParameterSet(param, value, axis);
                     }
                     else {
-                        std::cout << "current value is " << curValue << ", not updating to "
+                        std::cout << mbuf << "current value is " << curValue << ", not updating to "
                                   << value << std::endl;
                     }
                 }
                 else {
-                    std::cout << "already set to " << value << std::endl;
+                    // std::cout << mbuf << "already set to " << value << std::endl;
                 }
             }
             else if (it->second == FLAGS_ARRAY3H) {
                 long values[3];
                 if (sscanf(valueStr, "%x:%x:%x", &values[0], &values[1], &values[2]) != 3) {
-                    std::cout << "parse error" << std::endl;
+                    std::cout << mbuf << "parse error" << std::endl;
                     CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to parse parameter values (3H), param " << std::hex
                                              << param << " from [" << valueStr << "]" << std::dec << std::endl;
                     continue;
@@ -750,42 +874,42 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                 long curValues[2];
                 if (ParameterGetArray(param, curValues, 2, axis) == 0) {
                     if ((values[0] != curValues[0]) || (values[1] != curValues[1])) {
-                        std::cout << "updating from " << std::hex << curValues[0] << ", " << curValues[1]
+                        std::cout << mbuf << "updating from " << std::hex << curValues[0] << ", " << curValues[1]
                                   << " to " << values[0] << ", " << values[1] << std::dec << std::endl;
                         ParameterSetArray(param, values, 2, axis);
                     }
                     else {
-                        std::cout << "already set to " << std::hex << values[0] << ", " << values[1]
-                                  << std::dec << std::endl;
+                        // std::cout << mbuf << "already set to " << std::hex << values[0] << ", " << values[1]
+                        //           << std::dec << std::endl;
                     }
                 }
                 else {
-                    std::cout << "failed to read current values, not updating" << std::endl;
+                    std::cout << mbuf << "failed to read current values, not updating" << std::endl;
                 }
             }
             else if (it->second == FLAGS_FILTER) {
                 if (m_config.is_plus) {
                     // When reading, first two numbers are hex (start with 0x) and last five numbers
                     // are float (potentially in scientific notation)
-                    std::cout << "Filter not yet supported for Plus controller" << std::endl;
+                    std::cout << mbuf << "Filter not yet supported for Plus controller" << std::endl;
                 }
                 else {
                     // Following code (for non-Plus controller) not tested
                     long curValues[9];
                     if (ParameterGetArray(param, curValues, 9, axis) == 0) {
-                        std::cout << "Current values:";
+                        std::cout << mbuf << "Current values:";
                         for (unsigned int i = 0; i < 9; i++)
                             std::cout << " " << curValues[i];
                         std::cout << ", TODO: Update values" << std::endl;
                     }
                     else {
-                        std::cout << "failed to read current values" << std::endl;
+                        std::cout << mbuf << "failed to read current values" << std::endl;
                     }
                 }
             }
             else {
                 // Should not happen
-                std::cout << "unsupported parameter" << std::endl;
+                std::cout << mbuf << "unsupported parameter" << std::endl;
             }
         }
     }
