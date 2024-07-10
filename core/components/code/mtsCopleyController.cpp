@@ -22,6 +22,13 @@ http://www.cisst.org/cisst/license.txt.
 
 #include <sawCopleyController/mtsCopleyController.h>
 
+// Scale factors
+const double CurrentBitsToAmps = 0.01;
+const double VelocityBitsToCps = 0.1;        // counts/second
+const double AccelBitsToCps2 = 10.0;         // counts/s^2
+const double AccelLimitBitsToCps2 = 1000.0;  // counts/s^2
+
+
 CMN_IMPLEMENT_SERVICES_DERIVED_ONEARG(mtsCopleyController, mtsTaskContinuous, mtsStdString)
 
 mtsCopleyController::mtsCopleyController(const std::string &name) : mtsTaskContinuous(name, 1024, true)
@@ -71,6 +78,14 @@ void mtsCopleyController::SetupInterfaces(void)
         mInterface->AddCommandRead(&mtsCopleyController::GetConnected, this, "GetConnected");
         mInterface->AddCommandWriteReturn(&mtsCopleyController::SendCommandRet, this, "SendCommandRet");
         mInterface->AddCommandReadState(this->StateTable, mStatus, "GetStatus");
+        mInterface->AddCommandReadState(this->StateTable, mSpeed, "GetSpeed");
+        mInterface->AddCommandReadState(this->StateTable, mAccel, "GetAccel");
+        mInterface->AddCommandReadState(this->StateTable, mDecel, "GetDecel");
+        mInterface->AddCommandWrite(&mtsCopleyController::SetSpeed, this, "SetSpeed");
+        mInterface->AddCommandWrite(&mtsCopleyController::SetAccel, this, "SetAccel");
+        mInterface->AddCommandWrite(&mtsCopleyController::SetDecel, this, "SetDecel");
+        mInterface->AddCommandVoid(&mtsCopleyController::HomeAll, this, "Home");
+        mInterface->AddCommandWrite(&mtsCopleyController::Home, this, "Home");
     }
 }
 
@@ -83,6 +98,8 @@ void mtsCopleyController::Close()
 
 void mtsCopleyController::Configure(const std::string& fileName)
 {
+    unsigned int axis;
+
     std::ifstream jsonStream;
     jsonStream.open(fileName.c_str());
     Json::Value jsonConfig;
@@ -122,19 +139,44 @@ void mtsCopleyController::Configure(const std::string& fileName)
     // Status
     mStatus.SetSize(mNumAxes);
     mStatus.SetAll(0);
+    // Display scale and units
+    mDispScale.SetSize(mNumAxes);
+    mDispScale.SetAll(1.0);
+    mDispUnits.resize(mNumAxes);
+    // Max speed, accel, decel for position move (will be queried after loading ccx file)
+    mSpeed.SetSize(mNumAxes);
+    mAccel.SetSize(mNumAxes);
+    mDecel.SetSize(mNumAxes);
 
-    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+    for (axis = 0; axis < mNumAxes; axis++) {
         sawCopleyControllerConfig::axis &axisData = m_config.axes[axis];
         m_measured_js.Name()[axis].assign(1, 'A'+axis);
         m_config_j.Name()[axis].assign(1, 'A'+axis);
-        m_config_j.Type()[axis] = static_cast<cmnJointType>(axisData.type);
+        m_config_j.Type()[axis] = axisData.type;
         m_config_j.PositionMin()[axis] = axisData.position_limits.lower;
         m_config_j.PositionMax()[axis] = axisData.position_limits.upper;
+        if (axisData.type == CMN_JOINT_PRISMATIC) {
+            mDispScale[axis] = 1000.0;     // meters --> millimeters
+            mDispUnits[axis].assign("mm");
+        }
+        else if (axisData.type == CMN_JOINT_REVOLUTE) {
+            mDispScale[axis] = cmn180_PI;  // radians --> degrees
+            mDispUnits[axis].assign("deg");
+        }
+        else {
+            CMN_LOG_CLASS_INIT_WARNING << "mtsCopleyClient: joint " << axis << " is unknown type ("
+                                       << axisData.type << ")" << std::endl;
+            mDispScale[axis] = 1.0;
+            mDispUnits[axis].assign("cnts");
+        }
     }
 
     StateTable.AddData(mPosRaw, "position_raw");
     StateTable.AddData(m_measured_js, "measured_js");
     StateTable.AddData(mStatus, "status");
+    StateTable.AddData(mSpeed, "speed");
+    StateTable.AddData(mAccel, "accel");
+    StateTable.AddData(mDecel, "decel");
 
     // Call SetupInterfaces after Configure because we need to know the correct sizes of
     // the dynamic vectors, which are based on the number of configured axes.
@@ -193,6 +235,37 @@ void mtsCopleyController::Configure(const std::string& fileName)
 #endif
     if (!m_config.ccx_file.empty()) {
         LoadCCX(m_config.ccx_file);
+    }
+    // Now, query the default speed, accel and decel
+    // Could also add the jerk (0xce)
+    for (axis = 0; axis < mNumAxes; axis++) {
+        long speedRaw;
+        if (ParameterGet(0xcb, speedRaw, axis) == 0) {
+            mSpeed[axis] = (speedRaw*VelocityBitsToCps)/m_config.axes[axis].position_bits_to_SI.scale;
+            CMN_LOG_CLASS_INIT_VERBOSE << "Default speed[" << axis << "]: " << (mSpeed[axis]/mDispScale[axis])
+                                       << mDispUnits[axis] << "/s (" << speedRaw << ")" << std::endl;
+        }
+        else {
+            CMN_LOG_CLASS_INIT_ERROR << "Configure: failed to get speed" << std::endl;
+        }
+        long accelRaw;
+        if (ParameterGet(0xcc, accelRaw, axis) == 0) {
+            mAccel[axis] = (accelRaw*AccelBitsToCps2)/m_config.axes[axis].position_bits_to_SI.scale;
+            CMN_LOG_CLASS_INIT_VERBOSE << "Default accel[" << axis << "]: " << (mAccel[axis]/mDispScale[axis])
+                                       << mDispUnits[axis] << "/s^2 (" << accelRaw << ")" << std::endl;
+        }
+        else {
+            CMN_LOG_CLASS_INIT_ERROR << "Configure: failed to get acceleration" << std::endl;
+        }
+        long decelRaw;
+        if (ParameterGet(0xcd, decelRaw, axis) == 0) {
+            mDecel[axis] = (decelRaw*AccelBitsToCps2)/m_config.axes[axis].position_bits_to_SI.scale;
+            CMN_LOG_CLASS_INIT_VERBOSE << "Default decel[" << axis << "]: " << (mDecel[axis]/mDispScale[axis])
+                                       << mDispUnits[axis] << "/s^2 (" << decelRaw << ")" << std::endl;
+        }
+        else {
+            CMN_LOG_CLASS_INIT_ERROR << "Configure: failed to get deceleration" << std::endl;
+        }
     }
 }
 
@@ -443,6 +516,62 @@ void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &g
 #endif
 }
 
+void mtsCopleyController::SetSpeed(const vctDoubleVec &spd)
+{
+    if (spd.size() != mNumAxes) {
+        mInterface->SendError(this->GetName() + ": size mismatch in SetSpeed");
+        return;
+    }
+
+    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+        long speedRaw = static_cast<long>((spd[axis]*m_config.axes[axis].position_bits_to_SI.scale)/VelocityBitsToCps);
+        if (ParameterSet(0xcb, speedRaw, axis) == 0)
+            mSpeed[axis] = spd[axis];
+        else
+            CMN_LOG_CLASS_RUN_ERROR << "SetSpeed failed for axis " << axis << std::endl;
+    }
+}
+
+void mtsCopleyController::SetAccel(const vctDoubleVec &accel)
+{
+    if (accel.size() != mNumAxes) {
+        mInterface->SendError(this->GetName() + ": size mismatch in SetAccel");
+        return;
+    }
+
+    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+        long accelRaw = static_cast<long>((accel[axis]*m_config.axes[axis].position_bits_to_SI.scale)/AccelBitsToCps2);
+        if (ParameterSet(0xcc, accelRaw, axis) == 0)
+            mAccel[axis] = accel[axis];
+        else
+            CMN_LOG_CLASS_RUN_ERROR << "SetAccel failed for axis " << axis << std::endl;
+    }
+}
+
+void mtsCopleyController::SetDecel(const vctDoubleVec &decel)
+{
+    if (decel.size() != mNumAxes) {
+        mInterface->SendError(this->GetName() + ": size mismatch in SetDecel");
+        return;
+    }
+
+    for (unsigned int axis = 0; axis < mNumAxes; axis++) {
+        long decelRaw = static_cast<long>((decel[axis]*m_config.axes[axis].position_bits_to_SI.scale)/AccelBitsToCps2);
+        if (ParameterSet(0xcd, decelRaw, axis) == 0)
+            mDecel[axis] = decel[axis];
+        else
+            CMN_LOG_CLASS_RUN_ERROR << "SetDecel failed for axis " << axis << std::endl;
+    }
+}
+
+void mtsCopleyController::HomeAll()
+{
+}
+
+void mtsCopleyController::Home(const vctBoolVec &mask)
+{
+}
+
 unsigned int FLAGS_DEFAULT   = 0x0;  // single decimal integer, update if different
 unsigned int FLAGS_NO_UPDATE = 0x1;  // single decimal integer, do not update
 unsigned int FLAGS_ARRAY3H   = 0x2;  // array of 3 hex values
@@ -452,37 +581,37 @@ typedef std::map<unsigned int, unsigned int> ParameterMap;
 ParameterMap parms = {   // Programmed Position Mode Parameters
                          { 0xc8, FLAGS_DEFAULT  },    // Profile mode
                          { 0xca, FLAGS_DEFAULT  },    // Position command
-                         { 0xcb, FLAGS_DEFAULT  },    // Max velocity
-                         { 0xcc, FLAGS_DEFAULT  },    // Max accel
-                         { 0xcd, FLAGS_DEFAULT  },    // Max decel
-                         { 0xce, FLAGS_DEFAULT  },    // Max jerk
-                         { 0xcf, FLAGS_DEFAULT  },    // Abort decel
+                         { 0xcb, FLAGS_DEFAULT  },    // Max velocity, units 0.1 cnts/s
+                         { 0xcc, FLAGS_DEFAULT  },    // Max accel, units 10 cnts/s^2
+                         { 0xcd, FLAGS_DEFAULT  },    // Max decel, units 10 cnts/s^2
+                         { 0xce, FLAGS_DEFAULT  },    // Max jerk, units 100 cnts/s^3
+                         { 0xcf, FLAGS_DEFAULT  },    // Abort decel, units 10 cnts/s^2
                          // Homing Mode Parameters
                          { 0xc2, FLAGS_DEFAULT  },    // Home configuration
-                         { 0xc3, FLAGS_DEFAULT  },    // Home velocity fast
-                         { 0xc4, FLAGS_DEFAULT  },    // Home velocity slow
-                         { 0xc5, FLAGS_DEFAULT  },    // Home accel/decel
+                         { 0xc3, FLAGS_DEFAULT  },    // Home velocity fast, units cnts/s
+                         { 0xc4, FLAGS_DEFAULT  },    // Home velocity slow, units cnts/s
+                         { 0xc5, FLAGS_DEFAULT  },    // Home accel/decel, units 10 cnts/s^2
                          { 0xc6, FLAGS_NO_UPDATE },   // Home offset
-                         { 0xc7, FLAGS_DEFAULT  },    // Home current
+                         { 0xc7, FLAGS_DEFAULT  },    // Home current, units 0.01 A
                          { 0xb8, FLAGS_DEFAULT  },    // Positive software limit
                          { 0xb9, FLAGS_DEFAULT  },    // Negative software limit
-                         { 0xbf, FLAGS_DEFAULT  },    // Home current delay time
+                         { 0xbf, FLAGS_DEFAULT  },    // Home current delay time, units ms
                          // Current Loop Limits Parameters
-                         { 0x21, FLAGS_DEFAULT  },    // Peak current
-                         { 0x22, FLAGS_DEFAULT  },    // Continuous current
-                         { 0x23, FLAGS_DEFAULT  },    // Peak current time limit
-                         { 0xae, FLAGS_DEFAULT  },    // Current offset
+                         { 0x21, FLAGS_DEFAULT  },    // Peak current, units 0.01 A
+                         { 0x22, FLAGS_DEFAULT  },    // Continuous current, units 0.01 A
+                         { 0x23, FLAGS_DEFAULT  },    // Peak current time limit, units ms
+                         { 0xae, FLAGS_DEFAULT  },    // Current offset, units 0.01 A
                          // Current Loop Gains Parameters
                          { 0x00, FLAGS_DEFAULT },     // Cp
                          { 0x01, FLAGS_DEFAULT },     // Ci
-                         { 0x02, FLAGS_DEFAULT },     // Programmed current
-                         { 0x6a, FLAGS_DEFAULT },     // Commanded current ramp
+                         { 0x02, FLAGS_DEFAULT },     // Programmed current, units 0.01 A
+                         { 0x6a, FLAGS_DEFAULT },     // Commanded current ramp, units mA/s
                          // Velocity Loop Limits Parameters
-                         { 0x2f, FLAGS_DEFAULT },     // Programmed velocity
-                         { 0x36, FLAGS_DEFAULT },     // Accel limit
-                         { 0x37, FLAGS_DEFAULT },     // Decel limit
-                         { 0x39, FLAGS_DEFAULT },     // Fast stop ramp
-                         { 0x3a, FLAGS_DEFAULT },     // Velocity limit
+                         { 0x2f, FLAGS_DEFAULT },     // Programmed velocity, units 0.1 cnts/s
+                         { 0x36, FLAGS_DEFAULT },     // Accel limit, units 1000 cnts/s^2
+                         { 0x37, FLAGS_DEFAULT },     // Decel limit, units 1000 cnts/s^2
+                         { 0x39, FLAGS_DEFAULT },     // Fast stop ramp, units 1000 cnts/s^2
+                         { 0x3a, FLAGS_DEFAULT },     // Velocity limit, units 0.1 cnts/s
                          // Velocity Loop Gains Parameters
                          { 0x27, FLAGS_DEFAULT },     // Vp
                          { 0x28, FLAGS_DEFAULT },     // Vi
@@ -490,7 +619,7 @@ ParameterMap parms = {   // Programmed Position Mode Parameters
                          { 0x30, FLAGS_DEFAULT },     // Pp
                          { 0x33, FLAGS_DEFAULT },     // Vel ff
                          { 0x34, FLAGS_DEFAULT },     // Accel ff
-                         { 0xe3, FLAGS_DEFAULT },     // Gain mult
+                         { 0xe3, FLAGS_DEFAULT },     // Gain mult, units 0.01
                          // Status and state
                          { 0x24, FLAGS_NO_UPDATE },   // Desired state
                          // Filters

@@ -21,6 +21,7 @@ http://www.cisst.org/cisst/license.txt.
 #define _mtsCopleyController_h
 
 #include <string>
+#include <vector>
 
 #include <cisstVector/vctDynamicVectorTypes.h>
 #include <cisstMultiTask/mtsTaskContinuous.h>
@@ -70,6 +71,12 @@ protected:
     vctLongVec mStatus;
     prmConfigurationJoint m_config_j;       // Joint configuration
     prmStateJoint m_measured_js;            // Measured joint state (CRTK)
+    vctDoubleVec mDispScale;                // Display scale
+    std::vector<std::string> mDispUnits;    // Display units
+
+    vctDoubleVec mSpeed;                    // Max speed for position move
+    vctDoubleVec mAccel;                    // Max accel for position move
+    vctDoubleVec mDecel;                    // Max decel for position move
 
     void Init();
     void Close();
@@ -99,6 +106,16 @@ protected:
     void move_jr(const prmPositionJointSet &goal);
 
     void move_common(const char *cmdName, const vctDoubleVec &goal, unsigned int profile_type);
+
+    // Set speed, acceleration and deceleration
+    void SetSpeed(const vctDoubleVec &spd);
+    void SetAccel(const vctDoubleVec &accel);
+    void SetDecel(const vctDoubleVec &decel);
+
+    // Home: all axes
+    void HomeAll();
+    // Home: mask indicates which axes to home
+    void Home(const vctBoolVec &mask);
 };
 
 CMN_DECLARE_SERVICES_INSTANTIATION(mtsCopleyController)

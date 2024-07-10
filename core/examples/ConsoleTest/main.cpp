@@ -43,6 +43,9 @@ private:
     vctLongVec mPosRaw;
     vctLongVec mStatus;
     unsigned int numCharsPrev;
+    vctDoubleVec jtSpeed;
+    vctDoubleVec jtAccel;
+    vctDoubleVec jtDecel;
 
     mtsFunctionRead get_config_js;
     mtsFunctionRead measured_js;
@@ -53,6 +56,13 @@ private:
     mtsFunctionWrite move_jr;
     mtsFunctionRead GetConnected;   // Whether serial port is open
     mtsFunctionWriteReturn SendCommandRet;
+    mtsFunctionWrite SetSpeed;
+    mtsFunctionRead GetSpeed;
+    mtsFunctionWrite SetAccel;
+    mtsFunctionRead GetAccel;
+    mtsFunctionWrite SetDecel;
+    mtsFunctionRead GetDecel;
+    mtsFunctionVoid Home;
 
     void OnStatusEvent(const mtsMessage &msg) {
         std::cout << std::endl << "Status: " << msg.Message << std::endl;
@@ -77,6 +87,13 @@ public:
             req->AddFunction("move_jr", move_jr);
             req->AddFunction("SendCommandRet", SendCommandRet);
             req->AddFunction("configuration_js", get_config_js);
+            req->AddFunction("SetSpeed", SetSpeed);
+            req->AddFunction("GetSpeed", GetSpeed);
+            req->AddFunction("SetAccel", SetAccel);
+            req->AddFunction("GetAccel", GetAccel);
+            req->AddFunction("SetDecel", SetDecel);
+            req->AddFunction("GetDecel", GetDecel);
+            req->AddFunction("Home", Home);
             req->AddEventHandlerWrite(&CopleyClient::OnStatusEvent, this, "status");
             req->AddEventHandlerWrite(&CopleyClient::OnWarningEvent, this, "warning");
             req->AddEventHandlerWrite(&CopleyClient::OnErrorEvent, this, "error");
@@ -90,8 +107,12 @@ public:
         std::cout << "Available commands:" << std::endl
                   << "  m: absolute position move (move_jp)" << std::endl
                   << "  r: relative position move (move_jr)" << std::endl
+                  << "  s: set speed" << std::endl
+                  << "  a: set accel" << std::endl
+                  << "  d: set decel" << std::endl
                   << "  c: send command" << std::endl
                   << "  h: display help information" << std::endl
+                  << "  z: home robot" << std::endl
                   << "  q: quit" << std::endl;
     }
 
@@ -108,6 +129,9 @@ public:
         jtScale.SetSize(NumAxes);
         jtUnits.resize(NumAxes);
         jtposSet.Goal().SetSize(NumAxes);
+        jtSpeed.SetSize(NumAxes);
+        jtAccel.SetSize(NumAxes);
+        jtDecel.SetSize(NumAxes);
 
         // Get joint configuration
         get_config_js(m_config_js);
@@ -175,6 +199,36 @@ public:
                 move_jr(jtposSet);
                 break;
 
+            case 's':  // set speed
+                GetSpeed(jtSpeed);
+                jtSpeed.ElementwiseMultiply(jtScale);
+                std::cout << std::endl << "Current speed: " << jtSpeed;
+                if (NumAxes == 1)
+                    std::cout << jtUnits[0] << "/s";
+                std::cout << std::endl;
+                // TODO: set speed
+                break;
+
+            case 'a':  // set accel
+                GetAccel(jtAccel);
+                jtAccel.ElementwiseMultiply(jtScale);
+                std::cout << std::endl << "Current accel: " << jtAccel;
+                if (NumAxes == 1)
+                    std::cout << jtUnits[0] << "/s^2";
+                std::cout << std::endl;
+                // TODO: set accel
+                break;
+
+            case 'd':  // set decel
+                GetDecel(jtDecel);
+                jtDecel.ElementwiseMultiply(jtScale);
+                std::cout << std::endl << "Current decel: " << jtDecel;
+                if (NumAxes == 1)
+                    std::cout << jtUnits[0] << "/s^2";
+                std::cout << std::endl;
+                // TODO: set decel
+                break;
+
             case 'c':
                 if (copleyOK) {
                     std::string cmdString;
@@ -197,6 +251,16 @@ public:
             case 'h':
                 std::cout << std::endl;
                 PrintHelp();
+                break;
+
+            case 'z':
+                if (copleyOK) {
+                    std::cout << std::endl << "Homing" << std::endl;
+                    Home();
+                }
+                else {
+                    std::cout << std::endl << "Command not available - Copley not connected" << std::endl;
+                }
                 break;
 
             case 'q':   // quit program
