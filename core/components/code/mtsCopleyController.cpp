@@ -330,7 +330,7 @@ int mtsCopleyController::SendCommand(const char *cmd, int len, long *value, unsi
                 return 0;
             }
             Sleep(0.1);  // TEMP
-            char respBuf[64];
+            char respBuf[256];
             respBuf[0] = 0;
             int nRecv = mSerialPort.Read(respBuf, sizeof(respBuf));
             if (nRecv > 0) {
@@ -575,7 +575,7 @@ void mtsCopleyController::Home(const vctBoolVec &mask)
 unsigned int FLAGS_DEFAULT   = 0x0;  // single decimal integer, update if different
 unsigned int FLAGS_NO_UPDATE = 0x1;  // single decimal integer, do not update
 unsigned int FLAGS_ARRAY3H   = 0x2;  // array of 3 hex values
-unsigned int FLAGS_ARRAY9    = 0x4;  // array of 9 decimal values
+unsigned int FLAGS_FILTER    = 0x4;  // filter parameters (7 or 9 values)
 
 typedef std::map<unsigned int, unsigned int> ParameterMap;
 ParameterMap parms = {   // Programmed Position Mode Parameters
@@ -587,7 +587,7 @@ ParameterMap parms = {   // Programmed Position Mode Parameters
                          { 0xce, FLAGS_DEFAULT  },    // Max jerk, units 100 cnts/s^3
                          { 0xcf, FLAGS_DEFAULT  },    // Abort decel, units 10 cnts/s^2
                          // Homing Mode Parameters
-                         { 0xc2, FLAGS_DEFAULT  },    // Home configuration
+                         { 0xc2, FLAGS_NO_UPDATE },   // Home configuration
                          { 0xc3, FLAGS_DEFAULT  },    // Home velocity fast, units cnts/s
                          { 0xc4, FLAGS_DEFAULT  },    // Home velocity slow, units cnts/s
                          { 0xc5, FLAGS_DEFAULT  },    // Home accel/decel, units 10 cnts/s^2
@@ -622,10 +622,11 @@ ParameterMap parms = {   // Programmed Position Mode Parameters
                          { 0xe3, FLAGS_DEFAULT },     // Gain mult, units 0.01
                          // Status and state
                          { 0x24, FLAGS_NO_UPDATE },   // Desired state
+                         { 0xa7, FLAGS_DEFAULT },     // Fault mask
                          // Filters
-                         // Documentation states 9 values, but ccx file seems to have 7
-                         { 0x5f, FLAGS_ARRAY9 },      // Velocity loop output filter
-                         { 0x6b, FLAGS_ARRAY9 },      // Velocity loop command filter
+                         // 7 values (2 hex and 5 float) for Plus, or 9 decimal values
+                         { 0x5f, FLAGS_FILTER },      // Velocity loop output filter
+                         { 0x6b, FLAGS_FILTER },      // Velocity loop command filter
                          // Output configuration
                          { 0x70, FLAGS_ARRAY3H },     // Output 1 config
                          { 0x71, FLAGS_ARRAY3H },     // Output 2 config
@@ -634,7 +635,25 @@ ParameterMap parms = {   // Programmed Position Mode Parameters
                          { 0x74, FLAGS_ARRAY3H },     // Output 5 config
                          { 0x75, FLAGS_ARRAY3H },     // Output 6 config
                          { 0x76, FLAGS_ARRAY3H },     // Output 7 config
-                         { 0x77, FLAGS_ARRAY3H }      // Output 8 config
+                         { 0x77, FLAGS_ARRAY3H },     // Output 8 config
+                         // Input configuration
+                         { 0x78, FLAGS_DEFAULT},      // Input 1 config
+                         { 0x79, FLAGS_DEFAULT},      // Input 2 config
+                         { 0x7a, FLAGS_DEFAULT},      // Input 3 config
+                         { 0x7b, FLAGS_DEFAULT},      // Input 4 config
+                         { 0x7c, FLAGS_DEFAULT},      // Input 5 config
+                         { 0x7d, FLAGS_DEFAULT},      // Input 6 config
+                         { 0x7e, FLAGS_DEFAULT},      // Input 7 config
+                         { 0x7f, FLAGS_DEFAULT},      // Input 8 config
+                         { 0xd0, FLAGS_DEFAULT},      // Input 9 config
+                         { 0xd1, FLAGS_DEFAULT},      // Input 10 config
+                         { 0xd2, FLAGS_DEFAULT},      // Input 11 config
+                         { 0xd3, FLAGS_DEFAULT},      // Input 12 config
+                         { 0xd4, FLAGS_DEFAULT},      // Input 13 config
+                         { 0xd5, FLAGS_DEFAULT},      // Input 14 config
+                         { 0xd6, FLAGS_DEFAULT},      // Input 15 config
+                         { 0xd7, FLAGS_DEFAULT},      // Input 16 config
+                         { 0xa5, FLAGS_DEFAULT}       // Input configuration register
                         };
 
 bool mtsCopleyController::LoadCCX(const std::string &fileName)
@@ -727,33 +746,41 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                                              << param << " from [" << valueStr << "]" << std::dec << std::endl;
                     continue;
                 }
-                long curValues[3];
-                if (ParameterGetArray(param, curValues, 3, axis) == 0) {
-                    if ((values[0] != curValues[0]) || (values[1] != curValues[1]) || (values[2] != curValues[2])) {
+                // Note: The Copley Xenus Plus appears to use only the first two values
+                long curValues[2];
+                if (ParameterGetArray(param, curValues, 2, axis) == 0) {
+                    if ((values[0] != curValues[0]) || (values[1] != curValues[1])) {
                         std::cout << "updating from " << std::hex << curValues[0] << ", " << curValues[1]
-                                  << ", " << curValues[2] << " to " << values[0] << ", " << values[1]
-                                  << ", " << values[2] << std::dec << std::endl;
-                        ParameterSetArray(param, values, 3, axis);
+                                  << " to " << values[0] << ", " << values[1] << std::dec << std::endl;
+                        ParameterSetArray(param, values, 2, axis);
                     }
                     else {
                         std::cout << "already set to " << std::hex << values[0] << ", " << values[1]
-                                  << ", " << values[2] << std::dec << std::endl;
+                                  << std::dec << std::endl;
                     }
                 }
                 else {
                     std::cout << "failed to read current values, not updating" << std::endl;
                 }
             }
-            else if (it->second == FLAGS_ARRAY9) {
-                long curValues[9];
-                if (ParameterGetArray(param, curValues, 9, axis) == 0) {
-                    std::cout << "Current values:";
-                    for (unsigned int i = 0; i < 9; i++)
-                        std::cout << " " << curValues[i];
-                    std::cout << ", TODO: UPDATE" << std::endl;
+            else if (it->second == FLAGS_FILTER) {
+                if (m_config.is_plus) {
+                    // When reading, first two numbers are hex (start with 0x) and last five numbers
+                    // are float (potentially in scientific notation)
+                    std::cout << "Filter not yet supported for Plus controller" << std::endl;
                 }
                 else {
-                    std::cout << "failed to read current values" << std::endl;
+                    // Following code (for non-Plus controller) not tested
+                    long curValues[9];
+                    if (ParameterGetArray(param, curValues, 9, axis) == 0) {
+                        std::cout << "Current values:";
+                        for (unsigned int i = 0; i < 9; i++)
+                            std::cout << " " << curValues[i];
+                        std::cout << ", TODO: Update values" << std::endl;
+                    }
+                    else {
+                        std::cout << "failed to read current values" << std::endl;
+                    }
                 }
             }
             else {

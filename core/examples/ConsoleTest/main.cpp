@@ -204,7 +204,7 @@ public:
                 jtSpeed.ElementwiseMultiply(jtScale);
                 std::cout << std::endl << "Current speed: " << jtSpeed;
                 if (NumAxes == 1)
-                    std::cout << jtUnits[0] << "/s";
+                    std::cout << " " << jtUnits[0] << "/s";
                 std::cout << std::endl;
                 // TODO: set speed
                 break;
@@ -214,7 +214,7 @@ public:
                 jtAccel.ElementwiseMultiply(jtScale);
                 std::cout << std::endl << "Current accel: " << jtAccel;
                 if (NumAxes == 1)
-                    std::cout << jtUnits[0] << "/s^2";
+                    std::cout << " " << jtUnits[0] << "/s^2";
                 std::cout << std::endl;
                 // TODO: set accel
                 break;
@@ -224,7 +224,7 @@ public:
                 jtDecel.ElementwiseMultiply(jtScale);
                 std::cout << std::endl << "Current decel: " << jtDecel;
                 if (NumAxes == 1)
-                    std::cout << jtUnits[0] << "/s^2";
+                    std::cout << " " << jtUnits[0] << "/s^2";
                 std::cout << std::endl;
                 // TODO: set decel
                 break;

@@ -148,6 +148,12 @@ class {
         visibility public;
     }
     member {
+        name is_plus;
+        type bool;
+        default true;
+        visibility public;
+    }
+    member {
         name baud_rate;
         type unsigned long;
         default 9600;
