@@ -8,5 +8,6 @@ The CCX file format documentation can be found online. The first line is the ver
 
 | parameter id (hex) | axis number | parameter name | value(s) |
 |:-------------------|:------------|:---------------|:---------|
+|                    |             |                |          |
 
 The value field is usually a single decimal integer, but could contain multiple values (separated by `:`), or strings. Note that not all parameters in the CCX file are supported by the controller -- some of them are intended for use by software on the PC. The mtsCopleyController component  maintains a table of parameters that it will use; other parameters are ignored.
