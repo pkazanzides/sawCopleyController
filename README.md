@@ -1,6 +1,8 @@
 
 # sawCopleyController
 
+**This repository has been archived -- please use the [new repository](https://github.com/jhu-saw/sawCopleyController).**
+
 This SAW package contains a component (mtsCopleyController) that interfaces to a Copley Controller via a serial (RS232) interface. It has been tested with a Copley Xenus Plus single-axis controller, specifically XEC-230-15. The software has been written to support multi-axis controllers, but that feature has not been tested.
 
 Most of the source code is in the [core](./core) subdirectory to facilitate building with ROS1 or ROS2.
@@ -30,4 +32,5 @@ The JSON file contains the following fields:
 |  -- upper    | +MAX      | -- upper position limit                         |
 
 (*) The conversion (position_bits_to_SI) is applied as follows:  value_SI = value_bits/scale.
+
 (**) The home position is specified in the JSON file for convenience, and is used to set the home offset parameter (0xc6) on the drive; any setting of 0xc6 in the CCX file is ignored.
