@@ -135,6 +135,7 @@ class {
     member {
         name file_version;
         type int;
+        default 0;
         visibility public;
     }
     member {
