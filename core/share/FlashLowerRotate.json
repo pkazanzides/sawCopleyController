@@ -7,9 +7,9 @@
     "axes": [ {
         "type": "REVOLUTE",
         "position_bits_to_SI": {
-           "scale":  500000,
+           "scale":  250000,
            "offset": 0
         },
-	"home_pos": 2.0  // radians
+	"home_pos": -0.42  // radians
     } ]
 }

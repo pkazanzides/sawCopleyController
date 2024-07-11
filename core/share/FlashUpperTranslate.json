@@ -10,6 +10,6 @@
            "scale":  100000000,
            "offset": 0
         },
-	"home_pos": -0.01  // meters
+	"home_pos": 0.15  // meters
     } ]
 }

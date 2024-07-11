@@ -122,11 +122,11 @@ c6,0,Home Offset,-106500
 c7,0,Home Current,113
 c8,0,Trajectory Profile Mode,256
 ca,0,Trajectory Position Command,0
-cb,0,Trajectory Max Velocity,1875000
-cc,0,Trajectory Max Accel,375000
-cd,0,Trajectory Max Decel,375000
-ce,0,Trajectory Max Jerk,1500000
-cf,0,Trajectory Abort Decel,375000
+cb,0,Trajectory Max Velocity,187500
+cc,0,Trajectory Max Accel,37500
+cd,0,Trajectory Max Decel,37500
+ce,0,Trajectory Max Jerk,150000
+cf,0,Trajectory Abort Decel,37500
 d0,0,Input 9 Config,14
 d1,0,Input 10 Config,0
 d2,0,Input 11 Config,0

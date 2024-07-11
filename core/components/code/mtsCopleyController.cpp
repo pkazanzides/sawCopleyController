@@ -241,6 +241,7 @@ void mtsCopleyController::Configure(const std::string& fileName)
     }
 #endif
     if (!m_config.ccx_file.empty()) {
+        std::cout << "Loading drive data from " << m_config.ccx_file << std::endl;
         LoadCCX(m_config.ccx_file);
     }
     // Now, query the default speed, accel and decel
@@ -822,6 +823,7 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
     }
     while (ccxFile.good()) {
         ccxFile.getline(buf, sizeof(buf));
+        if (ccxFile.eof()) break;
         unsigned int param, axis, nchars;
         if (sscanf(buf, "%x,%d,%n", &param, &axis, &nchars) != 2) {
             CMN_LOG_CLASS_INIT_WARNING << "LoadCCX: failed to parse line [" << buf << "]" << std::endl;
@@ -841,7 +843,6 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
             if ((it->second == FLAGS_DEFAULT) || (it->second == FLAGS_NO_UPDATE)) {
                 long value;
                 if (sscanf(valueStr, "%d", &value) != 1) {
-                    std::cout << mbuf << "parse error" << std::endl;
                     CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to parse parameter value, param " << std::hex
                                              << param << " from [" << valueStr << "]" << std::dec << std::endl;
                     continue;
@@ -850,22 +851,22 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                 ParameterGet(param, curValue, axis);
                 if (value != curValue) {
                     if (it->second == FLAGS_DEFAULT) {
-                        std::cout << mbuf << "updating from " << curValue << " to " << value << std::endl;
+                        CMN_LOG_CLASS_INIT_VERBOSE << mbuf << "updating from " << curValue
+                                                   << " to " << value << std::endl;
                         ParameterSet(param, value, axis);
                     }
                     else {
-                        std::cout << mbuf << "current value is " << curValue << ", not updating to "
-                                  << value << std::endl;
+                        CMN_LOG_CLASS_INIT_VERBOSE << mbuf << "current value is " << curValue
+                                                   << ", not updating to " << value << std::endl;
                     }
                 }
                 else {
-                    // std::cout << mbuf << "already set to " << value << std::endl;
+                    // CMN_LOG_CLASS_INIT_VERBOSE << mbuf << "already set to " << value << std::endl;
                 }
             }
             else if (it->second == FLAGS_ARRAY3H) {
                 long values[3];
                 if (sscanf(valueStr, "%x:%x:%x", &values[0], &values[1], &values[2]) != 3) {
-                    std::cout << mbuf << "parse error" << std::endl;
                     CMN_LOG_CLASS_INIT_ERROR << "LoadCCX: failed to parse parameter values (3H), param " << std::hex
                                              << param << " from [" << valueStr << "]" << std::dec << std::endl;
                     continue;
@@ -874,24 +875,25 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                 long curValues[2];
                 if (ParameterGetArray(param, curValues, 2, axis) == 0) {
                     if ((values[0] != curValues[0]) || (values[1] != curValues[1])) {
-                        std::cout << mbuf << "updating from " << std::hex << curValues[0] << ", " << curValues[1]
-                                  << " to " << values[0] << ", " << values[1] << std::dec << std::endl;
+                        CMN_LOG_CLASS_INIT_VERBOSE << mbuf << "updating from " << std::hex << curValues[0] << ", "
+                                                   << curValues[1] << " to " << values[0] << ", " << values[1]
+                                                   << std::dec << std::endl;
                         ParameterSetArray(param, values, 2, axis);
                     }
                     else {
-                        // std::cout << mbuf << "already set to " << std::hex << values[0] << ", " << values[1]
-                        //           << std::dec << std::endl;
+                        // CMN_LOG_CLASS_INIT_VERBOSE << mbuf << "already set to " << std::hex << values[0]
+                        //                            << ", " << values[1] << std::dec << std::endl;
                     }
                 }
                 else {
-                    std::cout << mbuf << "failed to read current values, not updating" << std::endl;
+                    CMN_LOG_CLASS_INIT_WARNING << mbuf << "failed to read current values, not updating" << std::endl;
                 }
             }
             else if (it->second == FLAGS_FILTER) {
                 if (m_config.is_plus) {
                     // When reading, first two numbers are hex (start with 0x) and last five numbers
                     // are float (potentially in scientific notation)
-                    std::cout << mbuf << "Filter not yet supported for Plus controller" << std::endl;
+                    CMN_LOG_CLASS_INIT_WARNING << mbuf << "Filter not yet supported for Plus controller" << std::endl;
                 }
                 else {
                     // Following code (for non-Plus controller) not tested
@@ -903,13 +905,13 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                         std::cout << ", TODO: Update values" << std::endl;
                     }
                     else {
-                        std::cout << mbuf << "failed to read current values" << std::endl;
+                        CMN_LOG_CLASS_INIT_WARNING << mbuf << "failed to read current values" << std::endl;
                     }
                 }
             }
             else {
                 // Should not happen
-                std::cout << mbuf << "unsupported parameter" << std::endl;
+                CMN_LOG_CLASS_INIT_WARNING << mbuf << "unsupported parameter" << std::endl;
             }
         }
     }
