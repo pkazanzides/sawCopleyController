@@ -18,7 +18,7 @@ include (${CISST_USE_FILE})
 
 cisst_cpack_settings (
   VENDOR "JHU"
-  MAINTAINER "anton.deguet@jhu.edu")
+  MAINTAINER "pkaz@jhu.edu")
 
 add_subdirectory (components)
 
