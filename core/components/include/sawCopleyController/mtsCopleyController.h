@@ -97,7 +97,7 @@ protected:
     int ParameterGetArray(unsigned int addr, long *value, unsigned int num, unsigned int axis = 0, bool inRAM = true);
 
     // Methods for provided interface
-    void GetConnected(bool &val) const { val = mSerialPort.IsOpened(); }
+    void GetConnected(bool &val) const;
     void SendCommandRet(const std::string& cmdString, std::string &retString);
 
     // Get joint configuration

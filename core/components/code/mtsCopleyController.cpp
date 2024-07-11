@@ -244,6 +244,7 @@ void mtsCopleyController::Configure(const std::string& fileName)
         std::cout << "Loading drive data from " << m_config.ccx_file << std::endl;
         LoadCCX(m_config.ccx_file);
     }
+#ifndef SIMULATION
     // Now, query the default speed, accel and decel
     // Could also add the jerk (0xce)
     for (axis = 0; axis < mNumAxes; axis++) {
@@ -275,6 +276,7 @@ void mtsCopleyController::Configure(const std::string& fileName)
             CMN_LOG_CLASS_INIT_ERROR << "Configure: failed to get deceleration" << std::endl;
         }
     }
+#endif
 }
 
 void mtsCopleyController::Startup()
@@ -284,8 +286,9 @@ void mtsCopleyController::Startup()
 void mtsCopleyController::Run()
 {
     unsigned int axis;
-#ifndef SIMULATION
-    if (mSerialPort.IsOpened()) {
+    bool copleyOK;
+    GetConnected(copleyOK);
+    if (copleyOK) {
         long posRaw, status;
         for (unsigned int axis = 0; axis < mNumAxes; axis++) {
             if (ParameterGet(0x32, posRaw, axis) == 0) {
@@ -297,13 +300,6 @@ void mtsCopleyController::Run()
             }
         }
     }
-#else
-    for (axis = 0; axis < mNumAxes; axis++) {
-        mPosRaw[axis] = 0;
-        m_measured_js.Position()[axis] = 0.0;
-        mStatus[axis] = 0;
-    }
-#endif
 
     // Advance the state table now, so that any connected components can get
     // the latest data.
@@ -361,8 +357,8 @@ void mtsCopleyController::Cleanup(){
 int mtsCopleyController::SendCommand(const char *cmd, int len, long *value, unsigned int num)
 {
     int rc = -1;
-#ifndef SIMULATION
     msgBuf[0] = 0;
+#ifndef SIMULATION
     if (mSerialPort.IsOpened()) {
         int nSent = mSerialPort.Write(cmd, len);
         // Add CR ('\r') if not already in cmd
@@ -420,16 +416,26 @@ int mtsCopleyController::SendCommand(const char *cmd, int len, long *value, unsi
         }
     }
     else {
-        sprintf(msgBuf, "SendCommand %s: serial port not open", cmd);
+        sprintf(msgBuf, "SendCommand: serial port not open");
     }
 #else
-    sprintf(msgBuf, "SendCommand %s: no serial port in SIMULATION", cmd);
+    // sprintf(msgBuf, "SendCommand: no serial port in SIMULATION");
+    rc = 0;
 #endif
 
     if (msgBuf[0])
         mInterface->SendError(msgBuf);
 
     return rc;
+}
+
+void mtsCopleyController::GetConnected(bool &val) const
+{
+#ifndef SIMULATION
+    val = mSerialPort.IsOpened();
+#else
+    val = true;
+#endif
 }
 
 int mtsCopleyController::ParameterSet(unsigned int addr, long value, unsigned int axis, bool inRAM)
@@ -446,6 +452,7 @@ int mtsCopleyController::ParameterSet(unsigned int addr, long value, unsigned in
 
 int mtsCopleyController::ParameterGet(unsigned int addr, long &value, unsigned int axis, bool inRAM)
 {
+#ifndef SIMULATION
     char *p = cmdBuf;
     if (mNumAxes != 1) {
         sprintf(p, ".%c ", 'A'+axis);
@@ -454,6 +461,19 @@ int mtsCopleyController::ParameterGet(unsigned int addr, long &value, unsigned i
     char bank = inRAM ? 'r' : 'f';
     sprintf(p, "g %c0x%x\r", bank, addr);
     return SendCommand(cmdBuf, static_cast<int>(strlen(cmdBuf)), &value);
+#else
+    switch (addr) {
+    case 0x24:    // desired state
+        value = 21;
+        break;
+    case 0x32:    // position
+        value = mPosRaw[axis];
+        break;
+    default:
+        value = 0;
+    }
+    return 0;
+#endif
 }
 
 int mtsCopleyController::ParameterSetArray(unsigned int addr, long *value, unsigned int num,
@@ -530,7 +550,6 @@ void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &g
         return;
     }
 
-#ifndef SIMULATION
     unsigned int axis;
     for (axis = 0; axis < mNumAxes; axis++) {
         if (ParameterSet(0xc8, profile_type, axis) != 0) {
@@ -539,12 +558,12 @@ void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &g
             return;
         }
         long goalCnts = static_cast<long>(goal[axis]*m_config.axes[axis].position_bits_to_SI.scale);
+#ifndef SIMULATION
         if (ParameterSet(0xca, goalCnts, axis) != 0) {
             sprintf(msgBuf, "%s: failed to set position goal to %ld for axis %d", cmdName, goalCnts, axis);
             mInterface->SendError(msgBuf);
             return;
         }
-        mInterface->SendStatus(msgBuf);
         long desiredState = -1;
         ParameterGet(0x24, desiredState, axis);
         if (desiredState != 21) {
@@ -552,6 +571,12 @@ void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &g
             mInterface->SendStatus(msgBuf);
             ParameterSet(0x24, 21, axis);
         }
+#else
+        if (profile_type == 0)
+            mPosRaw[axis] = goalCnts;
+        else if (profile_type == 256)
+            mPosRaw[axis] += goalCnts;
+#endif
     }
     // Note that newer multi-axis drives allow the axes to be specified in the command code;
     // the following code could be updated to use that feature.
@@ -565,16 +590,17 @@ void mtsCopleyController::move_common(const char *cmdName, const vctDoubleVec &g
             rc = SendCommand(cmdBuf, 7);
         }
         if (rc == 0) {
+#ifndef SIMULATION
             sprintf(msgBuf, "%s: motion start on axis %d", cmdName, axis);
             mInterface->SendStatus(msgBuf);
             mState[axis] = ST_MOVING;
+#endif
         }
         else {
             sprintf(msgBuf, "%s: axis %d, error %d", cmdName, axis, rc);
             mInterface->SendError(msgBuf);
         }
     }
-#endif
 }
 
 void mtsCopleyController::SetSpeed(const vctDoubleVec &spd)
@@ -659,8 +685,8 @@ void mtsCopleyController::Home(const vctBoolVec &mask)
         if (mask[axis]) {
             // Set home offset
             long homeOffsetRaw = static_cast<long>(m_config.axes[axis].home_pos*m_config.axes[axis].position_bits_to_SI.scale);
-            sprintf(msgBuf, "Home: setting home offset for axis %d to %ld", axis, homeOffsetRaw);
-            mInterface->SendStatus(msgBuf);
+            // sprintf(msgBuf, "Home: setting home offset for axis %d to %ld", axis, homeOffsetRaw);
+            // mInterface->SendStatus(msgBuf);
             ParameterSet(0xc6, homeOffsetRaw, axis);
             long desiredState = -1;
             ParameterGet(0x24, desiredState, axis);
@@ -685,9 +711,13 @@ void mtsCopleyController::Home(const vctBoolVec &mask)
                 rc = SendCommand(cmdBuf, 7);
             }
             if (rc == 0) {
+#ifndef SIMULATION
                 sprintf(msgBuf, "Home: axis %d starting", axis);
                 mInterface->SendStatus(msgBuf);
                 mState[axis] = ST_HOMING;
+#else
+                mPosRaw[axis] = 0;
+#endif
             }
             else {
                 sprintf(msgBuf, "Home: axis %d, error %d", axis, rc);
@@ -847,6 +877,7 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                                              << param << " from [" << valueStr << "]" << std::dec << std::endl;
                     continue;
                 }
+#ifndef SIMULATION
                 long curValue;
                 ParameterGet(param, curValue, axis);
                 if (value != curValue) {
@@ -863,7 +894,23 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                 else {
                     // CMN_LOG_CLASS_INIT_VERBOSE << mbuf << "already set to " << value << std::endl;
                 }
+#else
+                switch (param) {
+                case 0xcb:  // Max velocity
+                    mSpeed[axis] = (value*VelocityBitsToCps)/m_config.axes[axis].position_bits_to_SI.scale;
+                    break;
+
+                case 0xcc:  // Max accel
+                    mAccel[axis] = (value*AccelBitsToCps2)/m_config.axes[axis].position_bits_to_SI.scale;
+                    break;
+
+                case 0xcd:  // Max decel
+                    mDecel[axis] = (value*AccelBitsToCps2)/m_config.axes[axis].position_bits_to_SI.scale;
+                    break;
+                }
+#endif
             }
+#ifndef SIMULATION
             else if (it->second == FLAGS_ARRAY3H) {
                 long values[3];
                 if (sscanf(valueStr, "%x:%x:%x", &values[0], &values[1], &values[2]) != 3) {
@@ -913,6 +960,7 @@ bool mtsCopleyController::LoadCCX(const std::string &fileName)
                 // Should not happen
                 CMN_LOG_CLASS_INIT_WARNING << mbuf << "unsupported parameter" << std::endl;
             }
+#endif
         }
     }
     return true;
